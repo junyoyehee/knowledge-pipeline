@@ -9,7 +9,7 @@ import signal
 import subprocess
 import threading
 
-from . import config, config_builder, secrets, storage, store
+from . import config, config_builder, remote, secrets, storage, store
 
 # 실행 중인 잡의 Popen 핸들 (취소용)
 _procs: dict[str, subprocess.Popen] = {}
@@ -89,11 +89,11 @@ def run_job(job: dict) -> None:
         if rejected:
             store.update_job(jid, progress={"rejected_overrides": rejected})
 
-        # 2) 커맨드 구성 (기존 스크립트를 패키지 모듈로 실행: python -m scripts.<group>.<name>)
+        # 2) 로컬/원격 실행 결정 (GPU 잡 + 원격 설정 시 SSH 원격 실행)
         module, *extra = _script_for(job)
-        cmd = [config.PYTHON, "-m", module, *extra, "--config", str(cfg_path)]
+        remote_mode = remote.enabled_for(job["type"])
 
-        # 3) 환경변수 (generate 잡은 LLM 시크릿 주입)
+        # 3) 환경변수 (generate 잡은 LLM 시크릿 주입; 원격 GPU 잡은 불필요)
         env = os.environ.copy()
         if job["type"] == "generate":
             sec = secrets.load_secrets(pid)
@@ -102,7 +102,16 @@ def run_job(job: dict) -> None:
             env["QA_GEN_MODEL"] = llm.get("model", sec.get("QA_GEN_MODEL", ""))
             env["QA_GEN_API_KEY"] = llm.get("api_key", sec.get("QA_GEN_API_KEY", "dummy"))
 
-    except Exception as e:  # noqa: BLE001  (구성 단계 실패)
+        if remote_mode:
+            # 입력 데이터·config·기존 어댑터를 원격으로 푸시 후 SSH 실행 커맨드 구성
+            remote.push_project(pid)
+            cmd = remote.build_cmd(module, extra, cfg_path)
+            cwd = None
+        else:
+            cmd = [config.PYTHON, "-m", module, *extra, "--config", str(cfg_path)]
+            cwd = str(config.REPO_ROOT)
+
+    except Exception as e:  # noqa: BLE001  (구성/원격 준비 단계 실패)
         store.update_job(jid, status="failed", error=f"구성 실패: {e}",
                          finished_at=store.now())
         _notify(job)
@@ -113,8 +122,12 @@ def run_job(job: dict) -> None:
     progress: dict = {}
     try:
         with open(log_path, "w", encoding="utf-8") as logf:
+            if remote_mode:
+                logf.write(f"[remote] {config.REMOTE_HOST} 에서 실행: "
+                           f"{' '.join(module.split())}\n")
+                logf.flush()
             proc = subprocess.Popen(
-                cmd, cwd=str(config.REPO_ROOT), env=env,
+                cmd, cwd=cwd, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 bufsize=1)
             with _procs_lock:
@@ -143,6 +156,15 @@ def run_job(job: dict) -> None:
         _notify(cur)
         return
     if rc == 0:
+        if remote_mode:                       # 원격 산출물(어댑터/모델)을 로컬로 회수
+            try:
+                remote.pull_outputs(pid)
+            except Exception as e:  # noqa: BLE001
+                store.update_job(jid, status="failed",
+                                 error=f"원격 산출물 회수 실패: {e}",
+                                 finished_at=store.now())
+                _notify(store.get_job(jid))
+                return
         store.update_job(jid, status="succeeded",
                          result=_collect_result(job, last_loss),
                          finished_at=store.now())

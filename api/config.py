@@ -31,6 +31,18 @@ SECRET_KEY = os.environ.get("KP_SECRET_KEY")
 GPU_JOB_TYPES = {"train", "export", "infer"}
 CPU_JOB_TYPES = {"prepare", "generate"}
 
+# ---------- 원격 unsloth(GPU) 실행 (docs/remote_unsloth.md §3 ②) ----------
+# 활성화 시 GPU 잡(train/export/infer)을 원격 GPU 호스트에서 SSH로 실행한다.
+# CPU 잡(prepare/generate)은 항상 로컬에서 실행된다.
+REMOTE_ENABLED = os.environ.get("KP_REMOTE_ENABLED", "").lower() in ("1", "true", "yes")
+REMOTE_HOST = os.environ.get("KP_REMOTE_HOST")            # 예: user@gpu-host
+REMOTE_DIR = os.environ.get("KP_REMOTE_DIR")              # 원격 리포 체크아웃 경로
+REMOTE_PYTHON = os.environ.get("KP_REMOTE_PYTHON", "python3")
+REMOTE_SSH_OPTS = os.environ.get("KP_REMOTE_SSH_OPTS", "")  # 예: "-p 2222 -i ~/key"
+# 원격 스토리지 루트는 로컬과 동일 절대경로로 미러링한다(생성된 config가 절대경로를
+# 담으므로 원격에서도 같은 경로여야 해석된다). 다른 경로를 쓰려면 이 값을 조정.
+REMOTE_STORAGE_ROOT = os.environ.get("KP_REMOTE_STORAGE_ROOT", str(STORAGE_ROOT))
+
 
 def ensure_storage() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
