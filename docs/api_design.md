@@ -416,6 +416,9 @@ Job 객체(공통):
 **배포(v1)**: 단일 GPU 노드. `api`(FastAPI/uvicorn) + `cpu-worker` + `gpu-worker`
 3개 프로세스, 공유 스토리지(로컬 볼륨) + 메타 DB(SQLite→Postgres).
 
+> **unsloth(GPU)가 원격 호스트일 때**의 배포(원격 GPU 워커 / SSH 러너 / 관리형
+> 스케줄러)는 [remote_unsloth.md](remote_unsloth.md)에 별도 정리되어 있습니다.
+
 **Phase 구분**
 - **Phase 1 (MVP)**: 프로젝트·파일·prepare·generate·train·export·jobs·infer(잡).
 - **Phase 2**: 상시 서빙 **Deployment**(어댑터 병합모델을 vLLM로 로드, `POST /deployments`,
