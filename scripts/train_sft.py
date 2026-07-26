@@ -19,17 +19,8 @@ from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
-from common import load_config
-
-# 채팅 템플릿별 user/assistant 구분 토큰 (응답만 학습할 때 사용)
-TEMPLATE_PARTS = {
-    "qwen-2.5":  ("<|im_start|>user\n", "<|im_start|>assistant\n"),
-    "chatml":    ("<|im_start|>user\n", "<|im_start|>assistant\n"),
-    "llama-3.1": ("<|start_header_id|>user<|end_header_id|>\n\n",
-                  "<|start_header_id|>assistant<|end_header_id|>\n\n"),
-    "llama-3":   ("<|start_header_id|>user<|end_header_id|>\n\n",
-                  "<|start_header_id|>assistant<|end_header_id|>\n\n"),
-}
+# 채팅 템플릿별 user/assistant 구분 토큰 (train_tool.py와 공용)
+from common import load_config, TEMPLATE_PARTS
 
 
 def main():

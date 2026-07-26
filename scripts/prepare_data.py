@@ -14,17 +14,21 @@
         {"conversations": [{"from": "human", "value": ...}, ...]}          (ShareGPT)
         {"instruction": "...", "input": "...", "output": "..."}            (Alpaca)
         {"question": "...", "answer": "..."} / {"prompt": ..., "response": ...}
+    data/raw/tools_*.jsonl        : (선택) 툴 호출 학습 데이터. docs/tool_calling.md
+        {"tools": [<함수 스키마>], "messages": [... tool_calls / role:tool ...]}
 
 출력 (각 줄에 meta 필드가 함께 붙습니다 — 의미와 활용법은 docs/meta_info.md):
     data/processed/cpt_dataset.jsonl   : {"text": "...", "meta": {...}}
     data/processed/sft_dataset.jsonl   : {"messages": [...], "meta": {...}}
+    data/processed/tool_dataset.jsonl  : {"messages": [...], "tools": "<JSON>", "meta": {...}}
 """
 import argparse
 import glob
 import json
 import os
 
-from common import content_hash, load_config, messages_hash, slugify
+from common import (content_hash, load_config, messages_hash, slugify,
+                    tool_sample_hash)
 
 # ---------------------------------------------------------------
 # 샘플 데이터 (원문이 없을 때 파이프라인 검증용으로 생성됨)
@@ -83,6 +87,104 @@ SAMPLE_QA = [
           "1차 낙토 현상은 제국력 847년에 발생했으며, 동부 카엘라 지방이 추락하는 피해가 있었습니다."),
     _turn("서리엄니 부족연합이 코어스톤 채굴을 금지하는 이유는?",
           "서리엄니 부족연합은 코어스톤을 신성한 '하늘의 심장'으로 숭배하기 때문에 채굴 자체를 금기시합니다. 이들은 북부 빙설 지대의 수렵 부족 연합으로, 대족장 카르가 서리엄니가 이끌고 있습니다."),
+]
+
+
+# ---------------------------------------------------------------
+# 샘플 툴 호출 데이터 (tools_*.jsonl이 없을 때 파이프라인 검증용으로 생성됨)
+# 실제 사용 시에는 자신의 함수 스키마와 대화를 tools_*.jsonl에 넣으세요.
+# 자세한 형식은 docs/tool_calling.md 참고.
+# ---------------------------------------------------------------
+SAMPLE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_corestone",
+            "description": "코어스톤 등급 정보를 조회한다. 등급별 이름·희귀도·존재 위치를 반환한다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "grade": {"type": "integer",
+                              "description": "조회할 코어스톤 등급 (1~5)"},
+                },
+                "required": ["grade"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_faction_info",
+            "description": "아스테리아 세력(왕국·상회·부족연합)의 상세 정보를 조회한다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "세력 이름. 예: 셀레스티아 왕국, 흑요 상회, 서리엄니 부족연합"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_events",
+            "description": "제국력 연표에서 사건을 조회한다. 기간을 지정하면 그 범위의 사건만 반환한다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "era_start": {"type": "integer",
+                                  "description": "조회 시작 제국력(연). 생략 시 처음부터"},
+                    "era_end": {"type": "integer",
+                                "description": "조회 끝 제국력(연). 생략 시 끝까지"},
+                },
+                "required": [],
+            },
+        },
+    },
+]
+
+
+def _tool_turn(user: str, name: str, arguments: dict,
+               tool_result: str, final: str) -> dict:
+    """단일 툴 호출 대화(요청 → 호출 → 결과 → 최종 답변) 샘플 생성."""
+    return {
+        "tools": SAMPLE_TOOLS,
+        "messages": [
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": name, "arguments": arguments}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": tool_result},
+            {"role": "assistant", "content": final},
+        ],
+    }
+
+
+SAMPLE_TOOL_SAMPLES = [
+    _tool_turn(
+        "5등급 코어스톤이 몇 개나 있고 어디에 있는지 알려줘",
+        "lookup_corestone", {"grade": 5},
+        '{"grade": 5, "name": "심장", "count": 3, '
+        '"locations": ["루멘하임 대성탑", "남부 해구", "북부 빙하 아래"]}',
+        "5등급 코어스톤 '심장'은 대륙 전체에 단 세 개만 존재합니다. "
+        "각각 루멘하임 대성탑, 남부 해구, 북부 빙하 아래에 있습니다."),
+    _tool_turn(
+        "흑요 상회가 어떤 조직인지 정리해줘",
+        "get_faction_info", {"name": "흑요 상회"},
+        '{"name": "흑요 상회", "type": "상인 길드", "leader": "베라 무어게이트", '
+        '"base": "남부 자유도시 연합", "note": "코어스톤 파편 밀거래, 셀레스티아 왕국과 긴장 관계"}',
+        "흑요 상회는 남부 자유도시 연합을 실질 지배하는 상인 길드입니다. "
+        "수장은 베라 무어게이트이며, 코어스톤 파편 밀거래로 부를 쌓아 "
+        "셀레스티아 왕국과 긴장 관계에 있습니다."),
+    _tool_turn(
+        "제국력 800년부터 1000년 사이에 무슨 일이 있었어?",
+        "list_events", {"era_start": 800, "era_end": 1000},
+        '{"events": [{"era": 847, "name": "1차 낙토 현상", "detail": "동부 카엘라 지방 추락"}, '
+        '{"era": 903, "name": "흑요 상회 결성"}]}',
+        "제국력 800~1000년 사이에는 두 사건이 있었습니다. 847년 1차 낙토 현상으로 "
+        "동부 카엘라 지방이 추락했고, 903년에는 흑요 상회가 결성되었습니다."),
 ]
 
 
@@ -214,6 +316,154 @@ def build_qa_meta(raw: dict, messages: list, path: str, lineno: int) -> dict:
     return meta
 
 
+# ---------------------------------------------------------------
+# 툴 호출(function calling) 데이터 정규화
+#   - tools: 함수 스키마 리스트를 OpenAI 형식({"type":"function","function":{...}})으로 통일
+#   - messages: assistant의 tool_calls, role:"tool" 결과를 검증
+#   - arguments/tools는 저장 시 JSON 문자열로 직렬화한다.
+#     함수마다 다른 인자 구조가 datasets(Arrow)의 스키마 추론을 깨뜨리기 때문.
+# ---------------------------------------------------------------
+TOOL_VALID_ROLES = {"system", "user", "assistant", "tool"}
+
+
+def _normalize_arguments(args) -> str | None:
+    """tool_call의 arguments를 JSON 문자열로 통일. 실패하면 None."""
+    if isinstance(args, str):
+        return args
+    try:
+        return json.dumps(args, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_tools(tools: list) -> list | None:
+    """함수 스키마 리스트를 OpenAI 형식으로 정규화. 유효하지 않으면 None."""
+    if not isinstance(tools, list) or not tools:
+        return None
+    normalized = []
+    for t in tools:
+        if not isinstance(t, dict):
+            return None
+        fn = t["function"] if isinstance(t.get("function"), dict) else \
+            {k: v for k, v in t.items() if k != "type"}
+        name = fn.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        normalized.append({"type": "function", "function": fn})
+    return normalized
+
+
+def _clean_tool_calls(tool_calls: list) -> list | None:
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return None
+    cleaned = []
+    for i, tc in enumerate(tool_calls, 1):
+        if not isinstance(tc, dict):
+            return None
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+        name = fn.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        arguments = _normalize_arguments(fn.get("arguments", {}))
+        if arguments is None:
+            return None
+        cleaned.append({
+            "id": str(tc.get("id") or f"call_{i}"),
+            "type": "function",
+            "function": {"name": name.strip(), "arguments": arguments},
+        })
+    return cleaned
+
+
+def _clean_tool_messages(messages: list) -> list | None:
+    """툴 호출 대화를 검증·정리. 유효하지 않으면 None.
+
+    규칙: system은 맨 앞에만 / user 최소 1개 / 마지막은 assistant /
+          tool 결과는 반드시 앞선 tool_call 뒤에 / 툴 호출이 최소 1개 존재.
+    """
+    if not isinstance(messages, list) or not messages:
+        return None
+    cleaned = []
+    seen_tool_call = False
+    for idx, m in enumerate(messages):
+        if not isinstance(m, dict):
+            return None
+        role = m.get("role")
+        if role not in TOOL_VALID_ROLES:
+            return None
+
+        if role == "assistant":
+            content = m.get("content")
+            content = content.strip() if isinstance(content, str) else ""
+            tool_calls = m.get("tool_calls")
+            if tool_calls is not None:
+                tool_calls = _clean_tool_calls(tool_calls)
+                if tool_calls is None:
+                    return None
+                seen_tool_call = True
+            if not content and not tool_calls:
+                return None  # 내용도 호출도 없는 빈 assistant 메시지
+            msg = {"role": "assistant", "content": content}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            cleaned.append(msg)
+        elif role == "tool":
+            if not seen_tool_call:
+                return None  # tool 결과가 호출보다 먼저 나올 수 없음
+            content = m.get("content")
+            if isinstance(content, (dict, list)):
+                content = json.dumps(content, ensure_ascii=False)
+            if not isinstance(content, str) or not content.strip():
+                return None
+            msg = {"role": "tool", "content": content.strip()}
+            if m.get("tool_call_id") is not None:
+                msg["tool_call_id"] = str(m["tool_call_id"])
+            cleaned.append(msg)
+        else:  # system / user
+            content = m.get("content")
+            if not isinstance(content, str) or not content.strip():
+                return None
+            cleaned.append({"role": role, "content": content.strip()})
+
+    if any(m["role"] == "system" for m in cleaned[1:]):
+        return None
+    if not any(m["role"] == "user" for m in cleaned):
+        return None
+    if cleaned[-1]["role"] != "assistant":
+        return None
+    if not seen_tool_call:
+        return None  # 툴 호출이 하나도 없으면 툴 학습 데이터가 아님 (qa로 넣으세요)
+    return cleaned
+
+
+def normalize_tool_sample(item: dict) -> dict | None:
+    """툴 호출 샘플을 검증·정규화 → {"messages": [...], "tools": [...]} 또는 None."""
+    if not isinstance(item, dict):
+        return None
+    tools = _normalize_tools(item.get("tools"))
+    if not tools:
+        return None
+    messages = _clean_tool_messages(item.get("messages"))
+    if not messages:
+        return None
+    return {"messages": messages, "tools": tools}
+
+
+def build_tool_meta(raw: dict, tools: list, messages: list,
+                    path: str, lineno: int) -> dict:
+    """툴 호출 샘플의 메타정보 생성. 입력에 meta가 있으면 그쪽을 우선한다."""
+    incoming = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    meta = {
+        "id": f"{slugify(path)}-{lineno:04d}",
+        "source": os.path.basename(path),
+        "origin": "human",          # 자동 생성분은 generate_tool_calls.py가 llm:*로 표기
+        "n_tools": len(tools),
+    }
+    meta.update({k: v for k, v in incoming.items() if v is not None})
+    meta["hash"] = tool_sample_hash(tools, messages)
+    return meta
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
@@ -230,9 +480,10 @@ def main():
         glob.glob(os.path.join(raw_dir, "*.md"))
     )
     qa_files = sorted(glob.glob(os.path.join(raw_dir, "qa_*.jsonl")))
+    tool_files = sorted(glob.glob(os.path.join(raw_dir, "tools_*.jsonl")))
 
-    # 아무것도 없으면 샘플 생성
-    if not doc_files and not qa_files:
+    # 아무것도 없으면 샘플 생성 (원문 + QA + 툴 호출)
+    if not doc_files and not qa_files and not tool_files:
         print("[i] data/raw/에 문서가 없어 샘플 데이터를 생성합니다.")
         sample_doc = os.path.join(raw_dir, "sample_worldbook.md")
         with open(sample_doc, "w", encoding="utf-8") as f:
@@ -241,7 +492,11 @@ def main():
         with open(sample_qa, "w", encoding="utf-8") as f:
             for item in SAMPLE_QA:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        doc_files, qa_files = [sample_doc], [sample_qa]
+        sample_tools = os.path.join(raw_dir, "tools_sample.jsonl")
+        with open(sample_tools, "w", encoding="utf-8") as f:
+            for item in SAMPLE_TOOL_SAMPLES:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        doc_files, qa_files, tool_files = [sample_doc], [sample_qa], [sample_tools]
 
     # ---------- CPT 데이터셋 생성 ----------
     # meta.id는 SFT 쪽에서 meta.chunk_id로 참조되므로 안정적으로 유지되어야 한다.
@@ -296,6 +551,50 @@ def main():
     else:
         print("[!] QA 파일(qa_*.jsonl)이 없습니다. SFT 단계를 건너뛰거나 "
               "generate_qa.py로 QA를 생성하세요.")
+
+    # ---------- 툴 호출 데이터셋 생성 (선택) ----------
+    tool_out = cfg["data"].get("tool_dataset")
+    if tool_files and tool_out:
+        os.makedirs(os.path.dirname(tool_out), exist_ok=True)
+        n_tool, n_tool_skipped = 0, 0
+        with open(tool_out, "w", encoding="utf-8") as out:
+            for path in tool_files:
+                with open(path, "r", encoding="utf-8") as f:
+                    for lineno, line in enumerate(f, 1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            raw = json.loads(line)
+                        except json.JSONDecodeError:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "JSON 파싱 실패 — 건너뜀")
+                            n_tool_skipped += 1
+                            continue
+                        item = normalize_tool_sample(raw)
+                        if not item:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "인식할 수 없는 툴 호출 형식 — 건너뜀")
+                            n_tool_skipped += 1
+                            continue
+                        record = {
+                            "messages": item["messages"],
+                            # tools는 함수마다 구조가 달라 JSON 문자열로 저장한다
+                            "tools": json.dumps(item["tools"], ensure_ascii=False),
+                            "meta": build_tool_meta(raw, item["tools"],
+                                                    item["messages"], path, lineno),
+                        }
+                        out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        n_tool += 1
+        if n_tool:
+            print(f"[OK] 툴 호출 데이터셋: {n_tool}개 대화 → {tool_out}"
+                  + (f" ({n_tool_skipped}개 건너뜀)" if n_tool_skipped else ""))
+        else:
+            print("[!] 유효한 툴 호출 샘플이 없습니다. docs/tool_calling.md의 형식을 "
+                  "확인하세요.")
+    elif tool_out:
+        print("[i] 툴 호출 파일(tools_*.jsonl)이 없어 tool 단계 데이터는 만들지 "
+              "않았습니다. generate_tool_calls.py로 생성하거나 tool 단계를 건너뛰세요.")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@
     python scripts/test_model.py                          # SFT 데이터에서 3개 자동 테스트
     python scripts/test_model.py -q "코어스톤 등급 체계는?"  # 직접 질문
     python scripts/test_model.py --stage cpt              # CPT 어댑터로 테스트
+    python scripts/test_model.py --stage tool             # 툴 호출 테스트 (함수 스키마 제공)
+    python scripts/test_model.py --stage tool --tools data/raw/tools_catalog.json
 """
 import argparse
 import json
@@ -18,14 +20,54 @@ from unsloth.chat_templates import get_chat_template
 from common import load_config, stage_adapter
 
 
+def load_test_tools(args, cfg):
+    """tool 스테이지 테스트용 함수 스키마를 로드 (없으면 None)."""
+    if args.tools:
+        with open(args.tools, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("tools") if isinstance(data, dict) else data
+    tool_path = cfg["data"].get("tool_dataset")
+    if tool_path and os.path.exists(tool_path):
+        with open(tool_path, "r", encoding="utf-8") as f:
+            first = f.readline().strip()
+        if first:
+            t = json.loads(first).get("tools")
+            return json.loads(t) if isinstance(t, str) else t
+    print("[!] 함수 스키마를 찾지 못했습니다. --tools로 지정하거나 tool_dataset을 먼저 만드세요.")
+    return None
+
+
+def read_first_questions(path, limit=3):
+    """데이터셋에서 첫 user 발화들을 뽑아 자동 테스트 질문으로 쓴다."""
+    questions = []
+    if not os.path.exists(path):
+        return questions
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            msgs = json.loads(line)["messages"]
+            user_turns = [m["content"] for m in msgs
+                          if m["role"] == "user" and m.get("content")]
+            if user_turns:
+                questions.append(user_turns[0])
+            if len(questions) >= limit:
+                break
+    return questions
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
     parser.add_argument("--stage",
-                        choices=["sft", "cpt", "dpo", "orpo", "kto"],
+                        choices=["sft", "cpt", "tool", "dpo", "orpo", "kto"],
                         default="sft")
     parser.add_argument("-q", "--question", action="append", default=None,
                         help="직접 질문 (여러 번 지정 가능)")
+    parser.add_argument("--tools", default=None,
+                        help="tool 스테이지 테스트 시 쓸 함수 스키마 JSON 파일 "
+                             "(생략 시 tool_dataset에서 로드)")
     parser.add_argument("--max-new-tokens", type=int, default=512)
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -45,29 +87,21 @@ def main():
     tokenizer = get_chat_template(tokenizer, chat_template=mcfg["chat_template"])
     FastLanguageModel.for_inference(model)  # 2배 빠른 추론 모드
 
-    # 질문 목록 구성
+    # tool 스테이지는 함수 스키마를 프롬프트에 넣어야 툴 호출이 나온다
+    tools = load_test_tools(args, cfg) if args.stage == "tool" else None
+
+    # 질문 목록 구성 (tool 스테이지는 tool_dataset에서, 그 외엔 sft_dataset에서 자동 추출)
     questions = args.question
     if not questions:
-        questions = []
-        sft_path = cfg["data"]["sft_dataset"]
-        if os.path.exists(sft_path):
-            with open(sft_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # messages에서 첫 user 발화를 질문으로 사용
-                    msgs = json.loads(line)["messages"]
-                    user_turns = [m["content"] for m in msgs if m["role"] == "user"]
-                    if user_turns:
-                        questions.append(user_turns[0])
-                    if len(questions) >= 3:
-                        break
+        source = (cfg["data"].get("tool_dataset") if args.stage == "tool"
+                  else cfg["data"]["sft_dataset"])
+        questions = read_first_questions(source) if source else []
         if not questions:
             questions = ["학습한 도메인 지식에 대해 설명해주세요."]
 
     # 학습 때와 동일한 system 프롬프트를 사용해야 함 (train/serve 불일치 방지)
-    system_prompt = cfg["sft"].get("system_prompt")
+    stage_key = "tool" if args.stage == "tool" else "sft"
+    system_prompt = cfg.get(stage_key, {}).get("system_prompt")
 
     for q in questions:
         messages = []
@@ -75,7 +109,7 @@ def main():
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": q})
         inputs = tokenizer.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=True,
+            messages, tools=tools, tokenize=True, add_generation_prompt=True,
             return_tensors="pt").to(model.device)
         outputs = model.generate(
             input_ids=inputs,
