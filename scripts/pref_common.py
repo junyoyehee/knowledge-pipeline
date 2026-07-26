@@ -80,6 +80,44 @@ def load_model(cfg: dict, stage_cfg: dict, stage_name: str):
     return model, tokenizer
 
 
+def load_stage_model(cfg: dict, stage_cfg: dict, stage_name: str):
+    """SFT류 전용 단계(tool/plan 등)용 모델·토크나이저 로드.
+
+    선호 학습의 load_model과 달리 reference 모델 개념이 없으므로 안내 문구가 다르다.
+    init_from을 해석해 어댑터를 이어받거나 새 LoRA를 부착하고, 채팅 템플릿을 적용한다.
+    """
+    mcfg = cfg["model"]
+    init_from = stage_cfg.get("init_from", "sft")
+    source, needs_new_lora = resolve_init_source(cfg, init_from)
+    print(f"[i] {stage_name.upper()} 시작 지점: {init_from} → {source}")
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=source,
+        max_seq_length=mcfg["max_seq_length"],
+        dtype=mcfg["dtype"],
+        load_in_4bit=mcfg["load_in_4bit"],
+    )
+
+    if needs_new_lora:
+        lcfg, tcfg = stage_cfg["lora"], stage_cfg["train"]
+        print("[i] 새 LoRA 어댑터를 부착합니다 (베이스/병합모델에서 시작)")
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=lcfg["r"],
+            target_modules=lcfg["target_modules"],
+            lora_alpha=lcfg["alpha"],
+            lora_dropout=lcfg["dropout"],
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=tcfg["seed"],
+        )
+    else:
+        print(f"[i] 기존 어댑터를 이어서 {stage_name} 능력을 추가합니다")
+
+    tokenizer = _apply_chat_template(tokenizer, mcfg["chat_template"])
+    return model, tokenizer
+
+
 def _apply_chat_template(tokenizer, template_name: str):
     from unsloth.chat_templates import get_chat_template
     return get_chat_template(tokenizer, chat_template=template_name)

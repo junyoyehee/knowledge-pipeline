@@ -21,11 +21,18 @@
     data/processed/cpt_dataset.jsonl   : {"text": "...", "meta": {...}}
     data/processed/sft_dataset.jsonl   : {"messages": [...], "meta": {...}}
     data/processed/tool_dataset.jsonl  : {"messages": [...], "tools": "<JSON>", "meta": {...}}
+    data/processed/plan_dataset.jsonl  : {"messages": [...], "meta": {"n_steps": N, ...}}
+
+계획수립(planning) 입력 형식 (data/raw/plans_*.jsonl):
+    {"goal": "목표", "steps": ["1단계", "2단계", ...]}          (권장)
+    {"instruction": "목표", "plan": ["..."], "context": "..."}  (alias 자동 인식)
+    {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}  (이미 대화형)
 """
 import argparse
 import glob
 import json
 import os
+import re
 
 from common import (content_hash, load_config, messages_hash, slugify,
                     tool_sample_hash)
@@ -185,6 +192,35 @@ SAMPLE_TOOL_SAMPLES = [
         '{"era": 903, "name": "흑요 상회 결성"}]}',
         "제국력 800~1000년 사이에는 두 사건이 있었습니다. 847년 1차 낙토 현상으로 "
         "동부 카엘라 지방이 추락했고, 903년에는 흑요 상회가 결성되었습니다."),
+]
+
+
+# ---------------------------------------------------------------
+# 샘플 계획수립 데이터 (plans_*.jsonl이 없을 때 파이프라인 검증용으로 생성됨)
+# 실제 사용 시에는 자신의 목표·단계를 plans_*.jsonl에 넣으세요. 형식은 docs/planning.md.
+# ---------------------------------------------------------------
+SAMPLE_PLANS = [
+    {"goal": "코어스톤 마력 감소 징후를 조사할 계획을 세워줘",
+     "steps": [
+         "관측 데이터 수집: 루멘하임 대성탑·남부 해구·북부 빙하의 5등급 코어스톤 마력 수치를 최근 관측치와 비교한다",
+         "이해관계자 확인: 성탑 기사단, 흑요 상회, 서리엄니 부족연합의 최근 동향과 보고를 취합한다",
+         "원인 가설 수립: 제국력 847년 카엘라 추락 전례와 비교해 마력 감소 패턴의 원인 가설을 정리한다",
+         "대응 우선순위 결정: 추락 위험이 큰 지역부터 마력 보강과 주민 대피 순서를 정한다",
+         "보고 및 재관측: 셀레스티아 왕국에 보고하고 정기 재관측 일정을 수립한다"]},
+    {"goal": "흑요 상회와의 협상을 준비하는 계획을 세워줘",
+     "steps": [
+         "목표 정의: 코어스톤 파편 밀거래 중단과 정보 공유라는 협상 목표를 명확히 한다",
+         "상대 분석: 수장 베라 무어게이트의 이해관계와 남부 자유도시 연합의 요구를 파악한다",
+         "지렛대 확보: 왕국이 제시할 교역 이권과 제재 카드를 정리한다",
+         "협상안 작성: 최소 합의선과 최대 요구안을 담은 단계별 제안을 준비한다",
+         "후속 조치: 합의 이행 점검 방법과 결렬 시 대안을 마련한다"]},
+    {"goal": "신입 성탑 기사에게 코어스톤 기초를 가르칠 교육 계획을 세워줘",
+     "steps": [
+         "개요 교육: 코어스톤의 정의와 대륙 부유 원리, 낙토 현상을 설명한다",
+         "등급 체계 학습: 1등급 티끌부터 5등급 심장까지 등급과 희귀도를 익힌다",
+         "현장 견학: 루멘하임 대성탑의 5등급 코어스톤 관리 절차를 참관한다",
+         "실무 훈련: 마력 수치 측정과 이상 징후 보고 절차를 실습한다",
+         "평가: 등급 판별과 비상 대응 시나리오로 이해도를 점검한다"]},
 ]
 
 
@@ -464,6 +500,105 @@ def build_tool_meta(raw: dict, tools: list, messages: list,
     return meta
 
 
+# ---------------------------------------------------------------
+# 계획수립(planning) 데이터 정규화
+#   - goal(목표) + steps(단계 배열)를 받아 표준 번호 목록으로 렌더링
+#   - 이미 messages 형식이면 그대로 검증만 통과시킨다
+# ---------------------------------------------------------------
+PLAN_MIN_STEPS = 2  # 단계가 1개뿐이면 '계획'이 아니므로 버린다
+
+
+def _step_to_text(step) -> str | None:
+    """단계 항목(문자열 또는 dict)을 한 줄 텍스트로 변환."""
+    if isinstance(step, (int, float)):
+        return str(step)
+    if isinstance(step, str):
+        return step.strip() or None
+    if isinstance(step, dict):
+        main = (step.get("step") or step.get("title") or step.get("name")
+                or step.get("description") or step.get("content"))
+        if not isinstance(main, str) or not main.strip():
+            return None
+        text = main.strip()
+        detail = step.get("detail")
+        if not detail and main is not step.get("description"):
+            detail = step.get("description")
+        if isinstance(detail, str) and detail.strip() and detail.strip() != text:
+            text = f"{text} — {detail.strip()}"
+        return text
+    return None
+
+
+def render_plan(steps: list, intro: str = None) -> str:
+    """단계 배열을 표준 번호 목록으로 렌더링 (모델이 배울 계획 형식)."""
+    lines = []
+    if isinstance(intro, str) and intro.strip():
+        lines.append(intro.strip())
+        lines.append("")
+    for i, s in enumerate(steps, 1):
+        lines.append(f"{i}. {s}")
+    return "\n".join(lines)
+
+
+def _count_plan_steps(text: str) -> int:
+    """이미 렌더링된 계획 텍스트에서 번호 매겨진 단계 수를 센다 (best-effort)."""
+    return len(re.findall(r"(?m)^\s*\d+[.)]\s", text))
+
+
+def normalize_plan_sample(item: dict) -> dict | None:
+    """계획 샘플을 검증·정규화 → {"messages": [...], "n_steps": N} 또는 None."""
+    if not isinstance(item, dict):
+        return None
+
+    # 1) 이미 messages 형식 (SFT용 검증기 재사용)
+    if isinstance(item.get("messages"), list):
+        messages = _clean_messages(item["messages"])
+        if not messages:
+            return None
+        return {"messages": messages,
+                "n_steps": _count_plan_steps(messages[-1]["content"])}
+
+    # 2) goal + steps 구조
+    goal = (item.get("goal") or item.get("instruction")
+            or item.get("question") or item.get("prompt"))
+    steps_raw = item.get("steps") or item.get("plan")
+    if not (isinstance(goal, str) and goal.strip()) or not isinstance(steps_raw, list):
+        return None
+    steps = [t for t in (_step_to_text(s) for s in steps_raw) if t]
+    if len(steps) < PLAN_MIN_STEPS:
+        return None
+
+    # 목표에 딸린 참고 자료(context/input)는 user 메시지에 합친다
+    user_content = goal.strip()
+    ctx = item.get("context") or item.get("input")
+    if isinstance(ctx, str) and ctx.strip():
+        user_content = f"{user_content}\n\n{ctx.strip()}"
+
+    messages = []
+    system = item.get("system")
+    if isinstance(system, str) and system.strip():
+        messages.append({"role": "system", "content": system.strip()})
+    messages.append({"role": "user", "content": user_content})
+    messages.append({"role": "assistant",
+                     "content": render_plan(steps, item.get("intro"))})
+    return {"messages": messages, "n_steps": len(steps)}
+
+
+def build_plan_meta(raw: dict, messages: list, n_steps: int,
+                    path: str, lineno: int) -> dict:
+    """계획 샘플의 메타정보 생성. 입력에 meta가 있으면 그쪽을 우선한다."""
+    incoming = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    meta = {
+        "id": f"{slugify(path)}-{lineno:04d}",
+        "source": os.path.basename(path),
+        "origin": "human",          # 자동 생성분은 generate_plans.py가 llm:*로 표기
+        "n_steps": n_steps,
+    }
+    meta.update({k: v for k, v in incoming.items() if v is not None})
+    meta["hash"] = messages_hash(messages)
+    return meta
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
@@ -481,9 +616,10 @@ def main():
     )
     qa_files = sorted(glob.glob(os.path.join(raw_dir, "qa_*.jsonl")))
     tool_files = sorted(glob.glob(os.path.join(raw_dir, "tools_*.jsonl")))
+    plan_files = sorted(glob.glob(os.path.join(raw_dir, "plans_*.jsonl")))
 
-    # 아무것도 없으면 샘플 생성 (원문 + QA + 툴 호출)
-    if not doc_files and not qa_files and not tool_files:
+    # 아무것도 없으면 샘플 생성 (원문 + QA + 툴 호출 + 계획수립)
+    if not doc_files and not qa_files and not tool_files and not plan_files:
         print("[i] data/raw/에 문서가 없어 샘플 데이터를 생성합니다.")
         sample_doc = os.path.join(raw_dir, "sample_worldbook.md")
         with open(sample_doc, "w", encoding="utf-8") as f:
@@ -496,7 +632,12 @@ def main():
         with open(sample_tools, "w", encoding="utf-8") as f:
             for item in SAMPLE_TOOL_SAMPLES:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        doc_files, qa_files, tool_files = [sample_doc], [sample_qa], [sample_tools]
+        sample_plans = os.path.join(raw_dir, "plans_sample.jsonl")
+        with open(sample_plans, "w", encoding="utf-8") as f:
+            for item in SAMPLE_PLANS:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        doc_files, qa_files = [sample_doc], [sample_qa]
+        tool_files, plan_files = [sample_tools], [sample_plans]
 
     # ---------- CPT 데이터셋 생성 ----------
     # meta.id는 SFT 쪽에서 meta.chunk_id로 참조되므로 안정적으로 유지되어야 한다.
@@ -595,6 +736,47 @@ def main():
     elif tool_out:
         print("[i] 툴 호출 파일(tools_*.jsonl)이 없어 tool 단계 데이터는 만들지 "
               "않았습니다. generate_tool_calls.py로 생성하거나 tool 단계를 건너뛰세요.")
+
+    # ---------- 계획수립 데이터셋 생성 (선택) ----------
+    plan_out = cfg["data"].get("plan_dataset")
+    if plan_files and plan_out:
+        os.makedirs(os.path.dirname(plan_out), exist_ok=True)
+        n_plan, n_plan_skipped = 0, 0
+        with open(plan_out, "w", encoding="utf-8") as out:
+            for path in plan_files:
+                with open(path, "r", encoding="utf-8") as f:
+                    for lineno, line in enumerate(f, 1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            raw = json.loads(line)
+                        except json.JSONDecodeError:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "JSON 파싱 실패 — 건너뜀")
+                            n_plan_skipped += 1
+                            continue
+                        item = normalize_plan_sample(raw)
+                        if not item:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "인식할 수 없는 계획 형식 — 건너뜀")
+                            n_plan_skipped += 1
+                            continue
+                        record = {
+                            "messages": item["messages"],
+                            "meta": build_plan_meta(raw, item["messages"],
+                                                    item["n_steps"], path, lineno),
+                        }
+                        out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        n_plan += 1
+        if n_plan:
+            print(f"[OK] 계획수립 데이터셋: {n_plan}개 계획 → {plan_out}"
+                  + (f" ({n_plan_skipped}개 건너뜀)" if n_plan_skipped else ""))
+        else:
+            print("[!] 유효한 계획 샘플이 없습니다. docs/planning.md의 형식을 확인하세요.")
+    elif plan_out:
+        print("[i] 계획 파일(plans_*.jsonl)이 없어 plan 단계 데이터는 만들지 "
+              "않았습니다. generate_plans.py로 생성하거나 plan 단계를 건너뛰세요.")
 
 
 if __name__ == "__main__":

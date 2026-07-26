@@ -11,6 +11,9 @@
 > 툴 호출 데이터셋(`tool_dataset.jsonl`)은 SFT와 같은 메타 필드에 더해 `n_tools`
 > (샘플에 제공된 함수 수)가 붙습니다. `hash`는 함수 스키마·tool_calls·결과까지 포함해
 > 계산합니다. 형식은 [tool_calling.md](tool_calling.md) 참고.
+>
+> 계획수립 데이터셋(`plan_dataset.jsonl`)은 SFT와 같은 메타 필드에 더해 `n_steps`
+> (계획 단계 수)가 붙습니다. 형식은 [planning.md](planning.md) 참고.
 
 ## 전제: 메타는 학습에 들어가지 않습니다
 

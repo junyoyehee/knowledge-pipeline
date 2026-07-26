@@ -22,21 +22,24 @@ knowledge-pipeline/
 ├── docs/
 │   ├── meta_info.md          # 데이터셋 meta 필드 의미와 활용법
 │   ├── preference_tuning.md  # DPO/ORPO/KTO 가이드 — 쓰기 전 필독
-│   └── tool_calling.md       # 툴 호출(function calling) 학습 가이드
+│   ├── tool_calling.md       # 툴 호출(function calling) 학습 가이드
+│   └── planning.md           # 계획수립(planning) 학습 가이드
 ├── requirements.txt
 ├── run_pipeline.sh           # 전체 파이프라인 원클릭 실행
 ├── data/
-│   ├── raw/                  # ← 원문(.txt/.md), qa_*.jsonl, tools_*.jsonl을 넣으세요
+│   ├── raw/                  # ← 원문(.txt/.md), qa_*.jsonl, tools_*.jsonl, plans_*.jsonl
 │   └── processed/            # 가공된 학습 데이터 (자동 생성)
 ├── scripts/
 │   ├── common.py             # config 로더, 메타정보 유틸
 │   ├── llm_client.py         # OpenAI 호환 API 클라이언트 (데이터 생성 공용)
-│   ├── prepare_data.py       # [1] 원문 → CPT/SFT/툴 데이터셋 (없으면 샘플 생성)
+│   ├── prepare_data.py       # [1] 원문 → CPT/SFT/툴/계획 데이터셋 (없으면 샘플 생성)
 │   ├── generate_qa.py        # [1.5] (선택) LLM으로 원문에서 QA 자동 생성
 │   ├── train_cpt.py          # [2] Continued Pretraining
 │   ├── train_sft.py          # [3] Supervised Fine-Tuning
 │   ├── generate_tool_calls.py# (선택) LLM으로 툴 호출 데이터 자동 생성
 │   ├── train_tool.py         # (선택) 툴 호출(function calling) 전용 학습
+│   ├── generate_plans.py     # (선택) LLM으로 계획수립 데이터 자동 생성
+│   ├── train_plan.py         # (선택) 계획수립(planning) 전용 학습
 │   ├── export_model.py       # [4] LoRA 병합 (16bit / GGUF)
 │   ├── test_model.py         # [5] 학습 결과 확인
 │   ├── generate_preference.py# (선택) 선호 학습 데이터 생성
@@ -145,6 +148,33 @@ bash run_pipeline.sh --with-tool
 > 기본 모델 Qwen2.5는 툴 호출 템플릿을 지원합니다. 데이터 형식·검증 규칙·자동
 > 생성·주의사항은 **[docs/tool_calling.md](docs/tool_calling.md)** 를 참고하세요.
 
+### (선택) 계획수립 학습 — planning
+
+목표(goal)를 받아 **단계별 계획(steps)** 을 세우는 능력을 가르치는 **별도 전용 단계**입니다.
+`data/raw/plans_*.jsonl`에 목표와 단계를 넣으면 표준 번호 목록으로 변환되어 학습됩니다:
+
+```json
+{"goal": "코어스톤 위기를 조사할 계획을 세워줘", "steps": ["관측 데이터 수집: ...", "원인 가설 수립: ...", "대응 우선순위 결정: ..."]}
+```
+
+```bash
+# (선택) LLM으로 계획 데이터 자동 생성
+export QA_GEN_BASE_URL=http://localhost:11434/v1
+export QA_GEN_MODEL=qwen2.5:14b
+python scripts/generate_plans.py --per-chunk 2
+
+python scripts/prepare_data.py          # plans_*.jsonl → plan_dataset.jsonl
+python scripts/train_plan.py            # 지식 SFT 위에 계획 능력 추가
+python scripts/test_model.py --stage plan
+python scripts/export_model.py --stage plan
+
+# 전체 파이프라인에 붙이려면:
+bash run_pipeline.sh --with-plan
+```
+
+> 데이터 형식·검증 규칙·자동 생성·주의사항은 **[docs/planning.md](docs/planning.md)** 를
+> 참고하세요. 계획을 세운 뒤 실제 도구 실행까지 하려면 툴 호출 학습과 함께 쓰면 됩니다.
+
 ### (선택) 선호 학습 — DPO / ORPO / KTO
 
 SFT 이후 **환각 억제**나 형식 교정이 필요할 때 추가하는 단계입니다.
@@ -175,7 +205,8 @@ python scripts/export_model.py --stage dpo
 | `sft.continue_from_cpt` | CPT 어댑터를 이어받을지 여부 |
 | `sft.system_prompt` | 데이터에 system이 없을 때 붙일 기본 system 프롬프트. `null`이면 미사용. 학습·추론에 동일 적용됨 |
 | `tool.init_from` | 툴 호출 학습 시작 지점 (`sft`(권장)/`cpt`/`base`/경로). [docs/tool_calling.md](docs/tool_calling.md) |
-| `export.source_stage` | 병합할 단계 (`sft`/`tool`/`dpo`/`orpo`/`kto`). ORPO/tool을 썼다면 반드시 변경 |
+| `plan.init_from` | 계획수립 학습 시작 지점 (`sft`(권장)/`cpt`/`base`/경로). [docs/planning.md](docs/planning.md) |
+| `export.source_stage` | 병합할 단계 (`sft`/`tool`/`plan`/`dpo`/`orpo`/`kto`). 전용 단계를 썼다면 반드시 변경 |
 | `export.save_gguf` | Ollama/llama.cpp용 GGUF 저장 여부 |
 | `preference.*` | 선호 학습 설정. [docs/preference_tuning.md](docs/preference_tuning.md) 참고 |
 
