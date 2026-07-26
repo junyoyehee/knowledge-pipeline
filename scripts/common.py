@@ -18,13 +18,14 @@ def load_config(config_path: str = None) -> dict:
 
     # 경로 필드를 절대 경로로 변환
     for key in ("raw_dir", "cpt_dataset", "sft_dataset", "tool_dataset",
-                "pref_dataset", "kto_dataset"):
+                "plan_dataset", "pref_dataset", "kto_dataset"):
         if cfg["data"].get(key):
             cfg["data"][key] = _abs(cfg["data"][key])
     cfg["cpt"]["output_dir"] = _abs(cfg["cpt"]["output_dir"])
     cfg["sft"]["output_dir"] = _abs(cfg["sft"]["output_dir"])
-    if cfg.get("tool"):
-        cfg["tool"]["output_dir"] = _abs(cfg["tool"]["output_dir"])
+    for optional_stage in ("tool", "plan"):
+        if cfg.get(optional_stage):
+            cfg[optional_stage]["output_dir"] = _abs(cfg[optional_stage]["output_dir"])
     cfg["export"]["merged_dir"] = _abs(cfg["export"]["merged_dir"])
     for stage in cfg.get("preference", {}).values():
         stage["output_dir"] = _abs(stage["output_dir"])
@@ -33,7 +34,7 @@ def load_config(config_path: str = None) -> dict:
 
 def stage_adapter(cfg: dict, stage: str) -> str:
     """단계 이름 → 해당 단계의 최종 어댑터 디렉터리 경로."""
-    if stage in ("cpt", "sft", "tool"):
+    if stage in ("cpt", "sft", "tool", "plan"):
         if stage not in cfg:
             raise ValueError(f"config에 '{stage}' 설정이 없습니다.")
         return os.path.join(cfg[stage]["output_dir"], "final")
@@ -44,7 +45,7 @@ def stage_adapter(cfg: dict, stage: str) -> str:
 
 
 # 채팅 템플릿별 user/assistant 구분 토큰 (응답만 학습할 때 사용)
-# train_sft.py / train_tool.py가 공용으로 사용한다. tool 데이터의 tool 결과는
+# train_sft.py / train_tool.py / train_plan.py가 공용으로 사용한다. tool 결과는
 # Qwen/ChatML 계열에서 user 블록으로 렌더링되므로 instruction_part로 함께 마스킹된다.
 TEMPLATE_PARTS = {
     "qwen-2.5":  ("<|im_start|>user\n", "<|im_start|>assistant\n"),

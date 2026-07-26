@@ -6,6 +6,7 @@
 사용법:
     python scripts/export_model.py [--config configs/config.yaml]
     python scripts/export_model.py --stage tool   # 툴 호출 어댑터 병합
+    python scripts/export_model.py --stage plan   # 계획수립 어댑터 병합
     python scripts/export_model.py --stage dpo    # 선호 학습 어댑터 병합
 """
 import argparse
@@ -20,7 +21,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
     parser.add_argument("--stage", default=None,
-                        help="병합할 단계 (sft/tool/dpo/orpo/kto). "
+                        help="병합할 단계 (sft/tool/plan/dpo/orpo/kto). "
                              "생략하면 config의 export.source_stage 사용")
     args = parser.parse_args()
     cfg = load_config(args.config)

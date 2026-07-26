@@ -26,6 +26,8 @@ data:
   sft_dataset: "data/processed/sft_dataset.jsonl"   # SFT용 (messages 필드, OpenAI 형식)
   # 툴 호출(function calling) 학습용 (선택) — 자세한 내용은 docs/tool_calling.md
   tool_dataset: "data/processed/tool_dataset.jsonl" # {messages, tools} 형식
+  # 계획수립(planning) 학습용 (선택) — 자세한 내용은 docs/planning.md
+  plan_dataset: "data/processed/plan_dataset.jsonl" # 목표 → 단계별 계획 (messages)
   # 선호 학습용 (선택) — generate_preference.py로 생성. 자세한 내용은 docs/preference_tuning.md
   pref_dataset: "data/processed/pref_dataset.jsonl" # DPO/ORPO 공용 (prompt/chosen/rejected)
   kto_dataset: "data/processed/kto_dataset.jsonl"   # KTO 전용 (prompt/completion/label)
@@ -133,6 +135,39 @@ tool:
     train_on_responses_only: true
 
 # =========================================================
+# 계획수립 학습 (선택 단계) — 반드시 docs/planning.md를 먼저 읽으세요
+# 목표(goal)를 받아 단계별 계획(steps)을 세우는 능력을 주입하는 전용 단계입니다.
+# 데이터 형식: {"goal": "...", "steps": ["1단계", "2단계", ...]} (자동으로 messages로 변환)
+# =========================================================
+plan:
+  output_dir: "outputs/plan"
+  # 어디서 시작할지: "sft"(기본) / "cpt" / "base" / 병합모델 경로
+  #   "sft"  → 지식 SFT 어댑터를 이어받아 계획 능력만 추가 (권장)
+  #   "base" → 베이스 모델에서 계획 능력만 학습 (지식과 분리)
+  init_from: "sft"
+  # 데이터에 system이 없을 때 붙일 기본 system 프롬프트. null이면 미사용.
+  # 예: "너는 목표를 받아 실행 가능한 단계별 계획을 세우는 전문가다."
+  system_prompt: null
+  lora:                            # init_from이 경로/base일 때만 새 어댑터 생성에 사용
+    r: 32
+    alpha: 32
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  train:
+    num_epochs: 3                  # 계획 형식 학습은 반복 노출이 효과적
+    per_device_batch_size: 2
+    gradient_accumulation_steps: 8
+    learning_rate: 1.0e-4
+    warmup_ratio: 0.05
+    lr_scheduler_type: "linear"
+    weight_decay: 0.01
+    logging_steps: 5
+    save_steps: 100
+    seed: 42
+    # 응답(계획)만 loss 계산. 목표(질문) 부분은 마스킹.
+    train_on_responses_only: true
+
+# =========================================================
 # 선호 학습 (선택 단계) — 반드시 docs/preference_tuning.md를 먼저 읽으세요
 # 지식 주입 효과는 없습니다. 환각 억제·형식 교정용입니다.
 # 데이터가 부족한 상태로 돌리면 모델이 오히려 나빠집니다.
@@ -222,7 +257,7 @@ preference:
 
 # ---------- 최종 저장 ----------
 export:
-  # 병합할 어댑터 단계: "sft" / "tool" / "dpo" / "orpo" / "kto"
+  # 병합할 어댑터 단계: "sft" / "tool" / "plan" / "dpo" / "orpo" / "kto"
   source_stage: "sft"
   merged_dir: "outputs/final_model"   # LoRA 병합된 16bit 모델
   save_gguf: false                    # true면 GGUF(q4_k_m)도 저장 (llama.cpp/ollama용)

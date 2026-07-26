@@ -22,49 +22,16 @@ import json
 import os
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함 (pref_common이 unsloth를 import)
-from pref_common import load_config, resolve_init_source, save_adapter
+from pref_common import load_config, load_stage_model, save_adapter
 
-from unsloth import FastLanguageModel, is_bfloat16_supported
-from unsloth.chat_templates import get_chat_template, train_on_responses_only
+from unsloth import is_bfloat16_supported
+from unsloth.chat_templates import train_on_responses_only
 
 from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
 from common import TEMPLATE_PARTS
-
-
-def load_model(cfg: dict, stage_cfg: dict):
-    """툴 학습용 모델·토크나이저 로드 (init_from 해석)."""
-    mcfg = cfg["model"]
-    init_from = stage_cfg.get("init_from", "sft")
-    source, needs_new_lora = resolve_init_source(cfg, init_from)
-    print(f"[i] TOOL 시작 지점: {init_from} → {source}")
-
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=source,
-        max_seq_length=mcfg["max_seq_length"],
-        dtype=mcfg["dtype"],
-        load_in_4bit=mcfg["load_in_4bit"],
-    )
-    if needs_new_lora:
-        lcfg, tcfg = stage_cfg["lora"], stage_cfg["train"]
-        print("[i] 새 LoRA 어댑터를 부착합니다 (베이스/병합모델에서 시작)")
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=lcfg["r"],
-            target_modules=lcfg["target_modules"],
-            lora_alpha=lcfg["alpha"],
-            lora_dropout=lcfg["dropout"],
-            bias="none",
-            use_gradient_checkpointing="unsloth",
-            random_state=tcfg["seed"],
-        )
-    else:
-        print("[i] 기존 어댑터를 이어서 툴 능력을 추가합니다")
-
-    tokenizer = get_chat_template(tokenizer, chat_template=mcfg["chat_template"])
-    return model, tokenizer
 
 
 def _load_args(arguments):
@@ -118,7 +85,7 @@ def main():
             "tools_*.jsonl을 넣고 prepare_data.py를 돌리거나, "
             "generate_tool_calls.py로 먼저 생성하세요.")
 
-    model, tokenizer = load_model(cfg, stage_cfg)
+    model, tokenizer = load_stage_model(cfg, stage_cfg, "tool")
     template_name = mcfg["chat_template"]
 
     # ---------- 데이터셋 ----------

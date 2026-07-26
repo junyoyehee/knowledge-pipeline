@@ -9,6 +9,8 @@
     python scripts/test_model.py --stage cpt              # CPT 어댑터로 테스트
     python scripts/test_model.py --stage tool             # 툴 호출 테스트 (함수 스키마 제공)
     python scripts/test_model.py --stage tool --tools data/raw/tools_catalog.json
+    python scripts/test_model.py --stage plan             # 계획수립 테스트
+    python scripts/test_model.py --stage plan -q "축제 준비 계획 세워줘"
 """
 import argparse
 import json
@@ -61,7 +63,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
     parser.add_argument("--stage",
-                        choices=["sft", "cpt", "tool", "dpo", "orpo", "kto"],
+                        choices=["sft", "cpt", "tool", "plan", "dpo", "orpo", "kto"],
                         default="sft")
     parser.add_argument("-q", "--question", action="append", default=None,
                         help="직접 질문 (여러 번 지정 가능)")
@@ -90,17 +92,20 @@ def main():
     # tool 스테이지는 함수 스키마를 프롬프트에 넣어야 툴 호출이 나온다
     tools = load_test_tools(args, cfg) if args.stage == "tool" else None
 
-    # 질문 목록 구성 (tool 스테이지는 tool_dataset에서, 그 외엔 sft_dataset에서 자동 추출)
+    # 질문 목록 구성 (스테이지별 데이터셋의 첫 user 발화를 자동 추출)
+    stage_source = {
+        "tool": cfg["data"].get("tool_dataset"),
+        "plan": cfg["data"].get("plan_dataset"),
+    }
     questions = args.question
     if not questions:
-        source = (cfg["data"].get("tool_dataset") if args.stage == "tool"
-                  else cfg["data"]["sft_dataset"])
+        source = stage_source.get(args.stage) or cfg["data"]["sft_dataset"]
         questions = read_first_questions(source) if source else []
         if not questions:
             questions = ["학습한 도메인 지식에 대해 설명해주세요."]
 
     # 학습 때와 동일한 system 프롬프트를 사용해야 함 (train/serve 불일치 방지)
-    stage_key = "tool" if args.stage == "tool" else "sft"
+    stage_key = args.stage if args.stage in ("tool", "plan") else "sft"
     system_prompt = cfg.get(stage_key, {}).get("system_prompt")
 
     for q in questions:
