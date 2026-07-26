@@ -1,5 +1,8 @@
-"""공용 유틸리티 — config 로드, 경로 처리."""
+"""공용 유틸리티 — config 로드, 경로 처리, 데이터 메타정보 생성."""
+import hashlib
 import os
+import re
+
 import yaml
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,3 +28,29 @@ def _abs(path: str) -> str:
     if os.path.isabs(path):
         return path
     return os.path.join(PROJECT_ROOT, path)
+
+
+# ---------------------------------------------------------------
+# 메타정보 유틸 (자세한 설계 근거는 docs/meta_info.md 참고)
+# ---------------------------------------------------------------
+
+def slugify(name: str) -> str:
+    """파일명 등을 ID에 쓸 수 있는 형태로 정규화."""
+    stem = os.path.splitext(os.path.basename(name))[0]
+    stem = re.sub(r"[^0-9A-Za-z가-힣_-]+", "-", stem).strip("-")
+    return stem or "unnamed"
+
+
+def content_hash(text: str) -> str:
+    """내용 기반 지문 — 중복 제거·재현 확인용.
+
+    공백을 정규화한 뒤 해시하므로 들여쓰기·줄바꿈만 다른 중복도 잡힌다.
+    """
+    normalized = " ".join(text.split())
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def messages_hash(messages: list) -> str:
+    """대화 전체(role 포함)의 지문. 답변만 다른 같은 질문도 구분된다."""
+    joined = "\n".join(f"{m['role']}:{m['content']}" for m in messages)
+    return content_hash(joined)

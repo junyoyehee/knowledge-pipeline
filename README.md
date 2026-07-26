@@ -19,6 +19,7 @@ QA jsonl      messages로 정규화     embed/lm_head 학습        응답만 lo
 ```
 knowledge-pipeline/
 ├── configs/config.yaml       # 모든 설정 (모델, 하이퍼파라미터, 경로)
+├── docs/meta_info.md         # 데이터셋 meta 필드 의미와 활용법
 ├── requirements.txt
 ├── run_pipeline.sh           # 전체 파이프라인 원클릭 실행
 ├── data/
@@ -70,6 +71,10 @@ messages 형식으로 변환합니다:
 
 변환 규칙: 마지막 메시지는 반드시 `assistant`여야 하고(학습 대상), `system`은 맨 앞에만
 올 수 있습니다. 위반하는 줄은 경고를 출력하고 건너뜁니다.
+
+가공된 데이터셋의 각 줄에는 출처·작성주체·중복 판별용 `meta` 필드가 자동으로
+붙습니다(학습에는 사용되지 않음). 필드별 의미와 활용법은
+[docs/meta_info.md](docs/meta_info.md)를 참고하세요.
 
 **아무 데이터도 없으면 샘플 데이터(가상 게임 세계관)가 자동 생성**되어
 파이프라인 동작을 바로 확인할 수 있습니다.

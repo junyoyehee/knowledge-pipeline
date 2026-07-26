@@ -10,7 +10,8 @@
     python scripts/generate_qa.py [--config configs/config.yaml] [--per-chunk 3]
 
 출력: data/processed/sft_dataset.jsonl 에 append
-      {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}
+      {"messages": [...], "meta": {"origin": "llm:<모델>", "chunk_id": ..., ...}}
+      meta 필드의 의미와 활용법은 docs/meta_info.md 참고
 """
 import argparse
 import json
@@ -18,7 +19,7 @@ import os
 import re
 import urllib.request
 
-from common import load_config
+from common import load_config, messages_hash
 
 PROMPT_TEMPLATE = """다음 문서 내용을 바탕으로, 문서에 담긴 지식을 확인하는 질문-답변 쌍을 {n}개 만들어주세요.
 
@@ -98,26 +99,43 @@ def main():
     if not os.path.exists(cpt_path):
         raise SystemExit("CPT 데이터셋이 없습니다. 먼저 prepare_data.py를 실행하세요.")
 
+    # CPT 청크를 meta와 함께 읽어둔다 (생성된 QA가 출처 청크를 가리키도록)
     chunks = []
     with open(cpt_path, "r", encoding="utf-8") as f:
-        for line in f:
+        for lineno, line in enumerate(f):
             line = line.strip()
-            if line:
-                chunks.append(json.loads(line)["text"])
+            if not line:
+                continue
+            record = json.loads(line)
+            meta = record.get("meta") or {}
+            chunks.append({
+                "text": record["text"],
+                "chunk_id": meta.get("id", f"chunk-{lineno:04d}"),
+                "source": meta.get("source"),
+            })
     if args.max_chunks:
         chunks = chunks[:args.max_chunks]
 
+    origin = f"llm:{model}"
     total = 0
     with open(cfg["data"]["sft_dataset"], "a", encoding="utf-8") as out:
         for i, chunk in enumerate(chunks, 1):
             try:
                 response = call_llm(base_url, api_key, model,
-                                    PROMPT_TEMPLATE.format(n=args.per_chunk, chunk=chunk))
+                                    PROMPT_TEMPLATE.format(n=args.per_chunk,
+                                                           chunk=chunk["text"]))
                 pairs = extract_qa_pairs(response)
             except Exception as e:  # noqa: BLE001
                 print(f"[!] 청크 {i}/{len(chunks)} 실패: {e}")
                 continue
-            for p in pairs:
+            for j, p in enumerate(pairs):
+                p["meta"] = {
+                    "id": f"gen-{chunk['chunk_id']}-{j}",
+                    "source": chunk["source"],
+                    "chunk_id": chunk["chunk_id"],
+                    "origin": origin,
+                    "hash": messages_hash(p["messages"]),
+                }
                 out.write(json.dumps(p, ensure_ascii=False) + "\n")
             total += len(pairs)
             print(f"[{i}/{len(chunks)}] QA {len(pairs)}개 생성 (누적 {total})")

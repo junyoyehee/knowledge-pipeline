@@ -62,7 +62,10 @@ def main():
     def add_eos(examples):
         return {"text": [t + eos for t in examples["text"]]}
 
-    dataset = dataset.map(add_eos, batched=True)
+    # meta 컬럼은 학습에 쓰지 않으므로 제거 (text만 남김)
+    dataset = dataset.map(add_eos, batched=True,
+                          remove_columns=[c for c in dataset.column_names
+                                          if c != "text"])
     print(f"[i] CPT 학습 샘플 수: {len(dataset)}")
 
     # ---------- 학습 ----------

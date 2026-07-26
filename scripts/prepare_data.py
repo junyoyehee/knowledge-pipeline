@@ -15,16 +15,16 @@
         {"instruction": "...", "input": "...", "output": "..."}            (Alpaca)
         {"question": "...", "answer": "..."} / {"prompt": ..., "response": ...}
 
-출력:
-    data/processed/cpt_dataset.jsonl   : {"text": "..."}
-    data/processed/sft_dataset.jsonl   : {"messages": [{"role": ..., "content": ...}]}
+출력 (각 줄에 meta 필드가 함께 붙습니다 — 의미와 활용법은 docs/meta_info.md):
+    data/processed/cpt_dataset.jsonl   : {"text": "...", "meta": {...}}
+    data/processed/sft_dataset.jsonl   : {"messages": [...], "meta": {...}}
 """
 import argparse
 import glob
 import json
 import os
 
-from common import load_config
+from common import content_hash, load_config, messages_hash, slugify
 
 # ---------------------------------------------------------------
 # 샘플 데이터 (원문이 없을 때 파이프라인 검증용으로 생성됨)
@@ -195,6 +195,25 @@ def normalize_qa(item: dict) -> dict | None:
     return {"messages": messages}
 
 
+def build_qa_meta(raw: dict, messages: list, path: str, lineno: int) -> dict:
+    """SFT 샘플의 메타정보 생성. 입력에 meta가 이미 있으면 그쪽을 우선한다.
+
+    (필드별 의미와 활용법은 docs/meta_info.md 참고)
+    """
+    incoming = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    meta = {
+        "id": f"{slugify(path)}-{lineno:04d}",
+        "source": os.path.basename(path),
+        "origin": "human",          # 사람이 작성한 QA. 자동 생성분은 generate_qa.py가 llm:*로 표기
+        "hash": messages_hash(messages),
+    }
+    # 입력 파일이 이미 갖고 있던 메타(출처 청크, 원본 ID 등)를 보존
+    meta.update({k: v for k, v in incoming.items() if v is not None})
+    # hash는 정규화 후 내용 기준이어야 하므로 항상 다시 계산
+    meta["hash"] = messages_hash(messages)
+    return meta
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
@@ -225,14 +244,25 @@ def main():
         doc_files, qa_files = [sample_doc], [sample_qa]
 
     # ---------- CPT 데이터셋 생성 ----------
+    # meta.id는 SFT 쪽에서 meta.chunk_id로 참조되므로 안정적으로 유지되어야 한다.
     n_chunks = 0
     with open(cfg["data"]["cpt_dataset"], "w", encoding="utf-8") as out:
         for path in doc_files:
             with open(path, "r", encoding="utf-8") as f:
                 text = f.read()
-            for chunk in chunk_text(text, cfg["data"]["chunk_size"],
-                                    cfg["data"]["chunk_overlap"]):
-                out.write(json.dumps({"text": chunk}, ensure_ascii=False) + "\n")
+            stem = slugify(path)
+            for idx, chunk in enumerate(chunk_text(text, cfg["data"]["chunk_size"],
+                                                   cfg["data"]["chunk_overlap"])):
+                record = {
+                    "text": chunk,
+                    "meta": {
+                        "id": f"{stem}-{idx:04d}",
+                        "source": os.path.basename(path),
+                        "chunk_index": idx,
+                        "hash": content_hash(chunk),
+                    },
+                }
+                out.write(json.dumps(record, ensure_ascii=False) + "\n")
                 n_chunks += 1
     print(f"[OK] CPT 데이터셋: {n_chunks}개 청크 → {cfg['data']['cpt_dataset']}")
 
@@ -253,6 +283,8 @@ def main():
                         continue
                     item = normalize_qa(raw)
                     if item:
+                        item["meta"] = build_qa_meta(raw, item["messages"],
+                                                     path, lineno)
                         out.write(json.dumps(item, ensure_ascii=False) + "\n")
                         n_qa += 1
                     else:
