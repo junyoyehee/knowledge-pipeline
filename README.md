@@ -4,8 +4,8 @@
 
 ```
 원문 문서 ──► [1] 데이터 준비 ──► [2] CPT (지식 주입) ──► [3] SFT (지시 튜닝) ──► [4] 병합 ──► [5] 테스트
-(txt/md)      청크 분할            원문 이어서 사전학습      QA로 대화형 튜닝        16bit/GGUF
-QA jsonl      QA 정규화            embed/lm_head 학습        응답만 loss 계산
+(txt/md)      청크 분할            원문 이어서 사전학습      대화 데이터로 튜닝      16bit/GGUF
+QA jsonl      messages로 정규화     embed/lm_head 학습        응답만 loss 계산
 ```
 
 **왜 2단계인가?** SFT만으로는 모델이 "답변 형식"만 배우고 지식 자체는 잘 흡수하지
@@ -51,13 +51,26 @@ CUDA GPU가 필요합니다. 24GB 이하 GPU(RTX 3090/4090 등) 기준으로 4bi
 ### 1. 데이터 넣기
 
 `data/raw/`에 도메인 원문 문서(`.txt`, `.md`)를 넣습니다.
-QA 쌍이 있으면 `qa_이름.jsonl`로 넣습니다 (한 줄에 하나):
+QA 쌍이 있으면 `qa_이름.jsonl`로 넣습니다 (한 줄에 하나). **OpenAI messages 형식이
+표준**이며, system 프롬프트와 멀티턴 대화를 그대로 담을 수 있습니다:
 
 ```json
-{"instruction": "질문", "output": "답변"}
+{"messages": [{"role": "user", "content": "질문"}, {"role": "assistant", "content": "답변"}]}
+{"messages": [{"role": "system", "content": "너는 아스테리아 세계관 전문가다."}, {"role": "user", "content": "질문"}, {"role": "assistant", "content": "답변"}]}
 ```
 
-`question`/`answer`, `prompt`/`response` 필드명도 자동 인식됩니다.
+기존에 갖고 있는 데이터가 다른 형식이어도 `prepare_data.py`가 자동으로
+messages 형식으로 변환합니다:
+
+| 입력 형식 | 예시 |
+|---|---|
+| ShareGPT | `{"conversations": [{"from": "human", "value": ...}, {"from": "gpt", "value": ...}]}` |
+| Alpaca | `{"instruction": ..., "input": ..., "output": ...}` (`input`은 user 메시지에 합쳐짐) |
+| QA | `{"question": ..., "answer": ...}` / `{"prompt": ..., "response": ...}` |
+
+변환 규칙: 마지막 메시지는 반드시 `assistant`여야 하고(학습 대상), `system`은 맨 앞에만
+올 수 있습니다. 위반하는 줄은 경고를 출력하고 건너뜁니다.
+
 **아무 데이터도 없으면 샘플 데이터(가상 게임 세계관)가 자동 생성**되어
 파이프라인 동작을 바로 확인할 수 있습니다.
 
@@ -100,6 +113,7 @@ python scripts/generate_qa.py --per-chunk 3
 | `cpt.train.num_epochs` | 지식 주입 반복 횟수. 데이터가 적으면 3~10 |
 | `cpt.train.embedding_learning_rate` | embed/lm_head 학습률 — 본체의 1/5~1/10 유지 |
 | `sft.continue_from_cpt` | CPT 어댑터를 이어받을지 여부 |
+| `sft.system_prompt` | 데이터에 system이 없을 때 붙일 기본 system 프롬프트. `null`이면 미사용. 학습·추론에 동일 적용됨 |
 | `export.save_gguf` | Ollama/llama.cpp용 GGUF 저장 여부 |
 
 ## VRAM 부족(OOM) 시 체크리스트

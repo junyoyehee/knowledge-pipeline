@@ -10,6 +10,7 @@
     python scripts/generate_qa.py [--config configs/config.yaml] [--per-chunk 3]
 
 출력: data/processed/sft_dataset.jsonl 에 append
+      {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}
 """
 import argparse
 import json
@@ -25,7 +26,7 @@ PROMPT_TEMPLATE = """다음 문서 내용을 바탕으로, 문서에 담긴 지�
 - 답변은 문서 내용만으로 완결되게 작성 (문서를 보지 않은 사람도 이해 가능하게)
 - "문서에 따르면" 같은 표현 금지
 - 반드시 아래 JSON 배열 형식으로만 출력:
-[{{"instruction": "질문", "output": "답변"}}, ...]
+[{{"question": "질문", "answer": "답변"}}, ...]
 
 문서:
 ---
@@ -51,7 +52,7 @@ def call_llm(base_url: str, api_key: str, model: str, prompt: str) -> str:
 
 
 def extract_qa_pairs(text: str) -> list:
-    """LLM 응답에서 JSON 배열 추출."""
+    """LLM 응답에서 JSON 배열을 추출해 OpenAI messages 형식으로 변환."""
     match = re.search(r"\[.*\]", text, re.DOTALL)
     if not match:
         return []
@@ -61,9 +62,15 @@ def extract_qa_pairs(text: str) -> list:
         return []
     result = []
     for item in items:
-        if isinstance(item, dict) and item.get("instruction") and item.get("output"):
-            result.append({"instruction": str(item["instruction"]).strip(),
-                           "output": str(item["output"]).strip()})
+        if not isinstance(item, dict):
+            continue
+        q, a = item.get("question"), item.get("answer")
+        if not (q and a):
+            continue
+        result.append({"messages": [
+            {"role": "user", "content": str(q).strip()},
+            {"role": "assistant", "content": str(a).strip()},
+        ]})
     return result
 
 

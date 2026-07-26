@@ -81,13 +81,14 @@ def main():
     dataset = load_dataset("json", data_files=cfg["data"]["sft_dataset"],
                            split="train")
 
+    # 데이터에 system이 없을 때 붙일 기본 system 프롬프트 (config, 없으면 생략)
+    default_system = scfg.get("system_prompt")
+
     def to_text(examples):
         texts = []
-        for q, a in zip(examples["instruction"], examples["output"]):
-            messages = [
-                {"role": "user", "content": q},
-                {"role": "assistant", "content": a},
-            ]
+        for messages in examples["messages"]:
+            if default_system and messages[0]["role"] != "system":
+                messages = [{"role": "system", "content": default_system}] + messages
             texts.append(tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False))
         return {"text": texts}

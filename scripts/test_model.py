@@ -52,15 +52,26 @@ def main():
             with open(sft_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    if line:
-                        questions.append(json.loads(line)["instruction"])
+                    if not line:
+                        continue
+                    # messages에서 첫 user 발화를 질문으로 사용
+                    msgs = json.loads(line)["messages"]
+                    user_turns = [m["content"] for m in msgs if m["role"] == "user"]
+                    if user_turns:
+                        questions.append(user_turns[0])
                     if len(questions) >= 3:
                         break
         if not questions:
             questions = ["학습한 도메인 지식에 대해 설명해주세요."]
 
+    # 학습 때와 동일한 system 프롬프트를 사용해야 함 (train/serve 불일치 방지)
+    system_prompt = cfg["sft"].get("system_prompt")
+
     for q in questions:
-        messages = [{"role": "user", "content": q}]
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": q})
         inputs = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
             return_tensors="pt").to(model.device)
