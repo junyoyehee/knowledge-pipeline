@@ -1,7 +1,15 @@
 """API 런타임 설정 (환경변수로 오버라이드)."""
 import os
+import socket
 import sys
 from pathlib import Path
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.lower() in ("1", "true", "yes", "on")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -17,6 +25,15 @@ API_KEYS = {k for k in os.environ.get("KP_API_KEYS", "dev-key").split(",") if k}
 # 잡 워커 동시성 — GPU 잡은 반드시 직렬(1) 권장
 GPU_CONCURRENCY = int(os.environ.get("KP_GPU_CONCURRENCY", "1"))
 CPU_CONCURRENCY = int(os.environ.get("KP_CPU_CONCURRENCY", "2"))
+
+# ---------- 워커 역할 게이팅 (docs/remote_unsloth.md §3 ①) ----------
+# 이 프로세스가 어떤 워커를 돌릴지. 원격 GPU 워커 구성에서는 API 호스트가
+# KP_GPU_WORKER_ENABLED=false로 GPU 잡을 원격 워커에 넘기고, GPU 호스트는
+# `python -m api.worker --role gpu`로 GPU 워커만 돌린다(공유 스토리지의 큐 공유).
+GPU_WORKER_ENABLED = _env_bool("KP_GPU_WORKER_ENABLED", True)
+CPU_WORKER_ENABLED = _env_bool("KP_CPU_WORKER_ENABLED", True)
+# 잡을 클레임한 워커 식별자(추적용)
+WORKER_ID = os.environ.get("KP_WORKER_ID", socket.gethostname())
 
 # 서브프로세스로 스크립트를 실행할 파이썬 인터프리터
 PYTHON = os.environ.get("KP_PYTHON", sys.executable)

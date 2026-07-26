@@ -41,6 +41,24 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 | `KP_REMOTE_DIR` | — | 원격 리포 체크아웃 경로 |
 | `KP_REMOTE_PYTHON` | `python3` | 원격 파이썬 |
 | `KP_REMOTE_SSH_OPTS` | — | 추가 ssh 옵션 (예: `-p 2222 -i ~/key`) |
+| `KP_GPU_WORKER_ENABLED` | `true` | 이 프로세스가 GPU 잡 워커를 돌릴지 |
+| `KP_CPU_WORKER_ENABLED` | `true` | 이 프로세스가 CPU 잡 워커를 돌릴지 |
+| `KP_WORKER_ID` | 호스트명 | 잡 클레임 워커 식별자 |
+
+### 원격 GPU 워커 (분리 배치, #8①)
+
+API 호스트에 GPU/unsloth 없이, **GPU 호스트를 상주 워커**로 두어 공유 스토리지의
+큐를 직접 소비하게 할 수 있습니다. `store`의 잡 클레임은 멀티프로세스 안전합니다.
+
+```bash
+# 공유 스토리지(NFS 등)를 두 호스트가 같은 절대경로로 마운트
+# API 호스트 — CPU 잡만, GPU 잡은 큐에 위임
+KP_STORAGE_ROOT=/mnt/shared/kp KP_GPU_WORKER_ENABLED=false uvicorn api.main:app --port 8000
+# GPU 호스트 — unsloth 설치, 같은 스토리지, GPU 워커만 상주
+KP_STORAGE_ROOT=/mnt/shared/kp python -m api.worker --role gpu
+```
+
+②(SSH 러너)와의 차이·확장(Redis)은 [../docs/remote_unsloth.md](../docs/remote_unsloth.md) §3 참고.
 
 ### 원격 unsloth(GPU) 실행 (SSH 러너, PoC)
 

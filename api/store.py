@@ -29,9 +29,13 @@ def init_db() -> None:
     global _conn
     ensure_storage()
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    _conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     _conn.row_factory = sqlite3.Row
     with _lock:
+        # WAL + busy_timeout: 여러 프로세스(API 호스트 + 원격 GPU 워커)가 공유
+        # 스토리지의 같은 DB를 큐로 쓸 수 있게 한다 (docs/remote_unsloth.md §3①).
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA busy_timeout=30000")
         _conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -41,11 +45,15 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY, project_id TEXT, type TEXT, stage TEXT,
                 status TEXT, params TEXT, progress TEXT, result TEXT, error TEXT,
-                callback_url TEXT, idempotency_key TEXT,
+                callback_url TEXT, idempotency_key TEXT, worker TEXT,
                 created_at TEXT, started_at TEXT, finished_at TEXT
             );
             """
         )
+        # 기존 DB 호환: worker 컬럼이 없으면 추가
+        cols = {r["name"] for r in _conn.execute("PRAGMA table_info(jobs)")}
+        if "worker" not in cols:
+            _conn.execute("ALTER TABLE jobs ADD COLUMN worker TEXT")
         _conn.commit()
 
 
@@ -152,25 +160,29 @@ def update_job(jid: str, **fields) -> None:
         _conn.commit()
 
 
-def claim_next_job(gpu: bool) -> dict | None:
+def claim_next_job(gpu: bool, worker_id: str | None = None) -> dict | None:
     """워커가 실행할 다음 queued 잡을 원자적으로 running으로 전환.
 
-    gpu=True면 GPU 잡, False면 CPU 잡만 대상으로 한다.
+    gpu=True면 GPU 잡, False면 CPU 잡만 대상으로 한다. 멀티프로세스(원격 GPU
+    워커 포함)에서도 안전하도록 `UPDATE ... WHERE status='queued'`의 rowcount로
+    실제 클레임 여부를 판정한다 — 경쟁에서 진 프로세스는 rowcount 0 → 다음 후보로.
     """
     types = tuple(GPU_JOB_TYPES if gpu else CPU_JOB_TYPES)
     placeholders = ",".join("?" * len(types))
     with _lock:
-        row = _conn.execute(
-            f"SELECT * FROM jobs WHERE status='queued' AND type IN "
-            f"({placeholders}) ORDER BY created_at LIMIT 1", types).fetchone()
-        if not row:
-            return None
-        _conn.execute(
-            "UPDATE jobs SET status='running', started_at=? WHERE id=? "
-            "AND status='queued'", (_now(), row["id"]))
-        _conn.commit()
-        again = _conn.execute("SELECT * FROM jobs WHERE id=?", (row["id"],)).fetchone()
-    return _job_row_to_dict(again) if again["status"] == "running" else None
+        rows = _conn.execute(
+            f"SELECT id FROM jobs WHERE status='queued' AND type IN "
+            f"({placeholders}) ORDER BY created_at LIMIT 5", types).fetchall()
+        for r in rows:
+            cur = _conn.execute(
+                "UPDATE jobs SET status='running', started_at=?, worker=? "
+                "WHERE id=? AND status='queued'", (_now(), worker_id, r["id"]))
+            _conn.commit()
+            if cur.rowcount == 1:      # 이 프로세스가 실제로 잡았을 때만
+                claimed = _conn.execute("SELECT * FROM jobs WHERE id=?",
+                                        (r["id"],)).fetchone()
+                return _job_row_to_dict(claimed)
+        return None
 
 
 def now() -> str:
