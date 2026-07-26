@@ -81,7 +81,7 @@
 3. 차이는 **한 가지 축**(이름/숫자/날짜/인과)만
 4. **rejected가 우연히 사실이면 안 됩니다** — 모델에게 거짓을 가르치는 셈입니다
 
-[`generate_preference.py`](../scripts/generate_preference.py)의 프롬프트는 이 원칙을
+[`generate_preference.py`](../scripts/generate/generate_preference.py)의 프롬프트는 이 원칙을
 반영했지만, **LLM 생성물은 반드시 사람이 표본 검수해야 합니다.** 최소 30~50건은
 직접 읽어보세요.
 
@@ -94,13 +94,13 @@ export QA_GEN_BASE_URL="http://localhost:11434/v1"
 export QA_GEN_MODEL="qwen2.5:14b"
 
 # 권장: 검증된 SFT 정답을 chosen으로 두고 오답만 생성
-python scripts/generate_preference.py --mode from-sft --per-sample 1
+python -m scripts.generate.generate_preference --mode from-sft --per-sample 1
 
 # SFT 데이터가 없거나 커버리지를 넓히고 싶을 때
-python scripts/generate_preference.py --mode from-chunks --per-chunk 3
+python -m scripts.generate.generate_preference --mode from-chunks --per-chunk 3
 
 # 환각 억제에 가장 직접적: "자료에 없는 질문" 거절 쌍
-python scripts/generate_preference.py --refusals-per-chunk 1
+python -m scripts.generate.generate_preference --refusals-per-chunk 1
 ```
 
 `--mode from-sft`를 권하는 이유는 **chosen이 이미 검증된 값**이기 때문입니다.
@@ -139,20 +139,20 @@ python scripts/generate_preference.py --refusals-per-chunk 1
 
 ```bash
 # DPO — SFT 뒤에 추가
-python scripts/train_dpo.py
+python -m scripts.train.train_dpo
 
 # ORPO — SFT 대신 (CPT 어댑터에서 시작)
-python scripts/train_orpo.py
+python -m scripts.train.train_orpo
 
 # KTO — SFT 뒤에 추가
-python scripts/train_kto.py
+python -m scripts.train.train_kto
 ```
 
 단계별 결과 확인과 병합:
 
 ```bash
-python scripts/test_model.py --stage dpo
-python scripts/export_model.py --stage dpo
+python -m scripts.model.test_model --stage dpo
+python -m scripts.model.export_model --stage dpo
 ```
 
 **ORPO를 썼다면 `export.source_stage`를 `orpo`로 바꾸는 것을 잊지 마세요.**
@@ -175,9 +175,9 @@ QLoRA 환경에서는 별도 모델을 올리지 않고 **LoRA 어댑터를 끈 
 결과가 기대에 못 미치면 정석 경로를 시도해볼 값어치가 있습니다:
 
 ```bash
-python scripts/export_model.py --stage sft        # SFT를 16bit로 병합
+python -m scripts.model.export_model --stage sft        # SFT를 16bit로 병합
 # config에서 preference.dpo.init_from을 "outputs/final_model"로 변경
-python scripts/train_dpo.py
+python -m scripts.train.train_dpo
 ```
 
 ORPO는 reference 모델 자체가 없으므로 이 논점이 없습니다.
@@ -211,7 +211,7 @@ ORPO는 SFT 역할을 겸하므로 2 정도가 적당합니다.
 (desirable_weight × 좋음 개수) / (undesirable_weight × 나쁨 개수) ≈ 1.0 ~ 1.33
 ```
 
-[`train_kto.py`](../scripts/train_kto.py)가 실제 비율을 계산해 벗어나면 권장값을
+[`train_kto.py`](../scripts/train/train_kto.py)가 실제 비율을 계산해 벗어나면 권장값을
 제안합니다. `generate_preference.py`로 만든 데이터는 쌍에서 분해되어 1:1이므로
 기본값 그대로 두면 됩니다.
 
@@ -236,11 +236,11 @@ ORPO는 `rewards/*` 대신 `log_odds_ratio`, `log_odds_chosen`을 봅니다.
 
 ```bash
 # 학습한 도메인 질문 — 정확도가 올랐는가
-python scripts/test_model.py --stage dpo
+python -m scripts.model.test_model --stage dpo
 
 # 도메인과 무관한 일반 질문 — 능력이 망가지지 않았는가 (필수!)
-python scripts/test_model.py --stage dpo -q "파이썬으로 리스트를 정렬하는 법은?"
-python scripts/test_model.py --stage dpo -q "안녕하세요, 오늘 기분이 어때요?"
+python -m scripts.model.test_model --stage dpo -q "파이썬으로 리스트를 정렬하는 법은?"
+python -m scripts.model.test_model --stage dpo -q "안녕하세요, 오늘 기분이 어때요?"
 ```
 
 두 번째가 핵심입니다. 도메인 정확도만 보고 배포하면, 일반 대화가 망가진 걸
@@ -263,7 +263,7 @@ python scripts/test_model.py --stage dpo -q "안녕하세요, 오늘 기분이 �
 않습니다. 결과가 나쁘면 그냥 SFT를 쓰면 됩니다:
 
 ```bash
-python scripts/export_model.py --stage sft
+python -m scripts.model.export_model --stage sft
 ```
 
 **단, ORPO는 예외입니다.** SFT를 대체하므로 `init_from: "cpt"`로 CPT에서 시작하며,

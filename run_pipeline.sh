@@ -27,13 +27,13 @@ for arg in "$@"; do
 done
 
 echo "===== [1/6] 데이터 준비 ====="
-python scripts/prepare_data.py
+python -m scripts.data.prepare_data
 
 echo "===== [2/6] CPT (지식 주입) ====="
-python scripts/train_cpt.py
+python -m scripts.train.train_cpt
 
 echo "===== [3/6] SFT (지시 튜닝) ====="
-python scripts/train_sft.py
+python -m scripts.train.train_sft
 
 # 병합/테스트에 쓸 단계 (지정된 전용 단계가 우선, 없으면 SFT)
 STAGE_ARGS=()
@@ -44,34 +44,34 @@ else
   echo "===== [4/6] 전용 단계 학습 ====="
   if [ "$WITH_TOOL" = true ]; then
     echo "----- 툴 호출 학습 -----"
-    python scripts/train_tool.py
+    python -m scripts.train.train_tool
     STAGE_ARGS=(--stage tool)
   fi
   if [ "$WITH_PLAN" = true ]; then
     echo "----- 계획수립 학습 -----"
-    python scripts/train_plan.py
+    python -m scripts.train.train_plan
     STAGE_ARGS=(--stage plan)   # plan을 병합/테스트 기준으로 (tool보다 우선)
   fi
   if [ "$WITH_REACT" = true ]; then
     echo "----- 추론형(ReAct) 학습 -----"
-    python scripts/train_react.py
+    python -m scripts.train.train_react
     STAGE_ARGS=(--stage react)  # react를 병합/테스트 기준으로 (plan/tool보다 우선)
   fi
   if [ "$WITH_PLANACT" = true ]; then
     echo "----- 계획-실행(plan-and-execute) 학습 -----"
-    python scripts/train_planact.py
+    python -m scripts.train.train_planact
     STAGE_ARGS=(--stage planact)  # planact를 병합/테스트 기준으로 (최우선)
   fi
 fi
 
 if [ "$SKIP_EXPORT" = false ]; then
   echo "===== [5/6] 모델 병합 ====="
-  python scripts/export_model.py "${STAGE_ARGS[@]}"
+  python -m scripts.model.export_model "${STAGE_ARGS[@]}"
 else
   echo "===== [5/6] 모델 병합 건너뜀 ====="
 fi
 
 echo "===== [6/6] 결과 테스트 ====="
-python scripts/test_model.py "${STAGE_ARGS[@]}"
+python -m scripts.model.test_model "${STAGE_ARGS[@]}"
 
 echo "===== 파이프라인 완료 ====="

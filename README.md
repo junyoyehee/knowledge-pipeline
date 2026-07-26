@@ -16,45 +16,28 @@ QA jsonl      messages로 정규화     embed/lm_head 학습        응답만 lo
 
 ## 디렉터리 구조
 
+각 폴더의 정확한 역할은 **[docs/project_structure.md](docs/project_structure.md)** 에 정리되어 있습니다.
+
 ```
 knowledge-pipeline/
 ├── configs/config.yaml       # 모든 설정 (모델, 하이퍼파라미터, 경로)
-├── docs/
-│   ├── meta_info.md          # 데이터셋 meta 필드 의미와 활용법
-│   ├── preference_tuning.md  # DPO/ORPO/KTO 가이드 — 쓰기 전 필독
-│   ├── tool_calling.md       # 툴 호출(function calling) 학습 가이드
-│   ├── planning.md           # 계획수립(planning) 학습 가이드
-│   ├── react.md              # 추론형(ReAct) 학습 가이드
-│   └── planact.md            # 계획-실행(plan-and-execute) 학습 가이드
-├── requirements.txt
+├── docs/                     # 설계·가이드 문서 (project_structure, meta_info, 각 단계 가이드)
+├── requirements.txt          # 학습 스택 의존성 (unsloth 등)
 ├── run_pipeline.sh           # 전체 파이프라인 원클릭 실행
 ├── data/
 │   ├── raw/                  # ← 원문(.txt/.md), qa_/tools_/plans_/react_/planact_*.jsonl
 │   └── processed/            # 가공된 학습 데이터 (자동 생성)
-├── scripts/
-│   ├── common.py             # config 로더, 메타정보 유틸
-│   ├── llm_client.py         # OpenAI 호환 API 클라이언트 (데이터 생성 공용)
-│   ├── prepare_data.py       # [1] 원문 → CPT/SFT/툴/계획 데이터셋 (없으면 샘플 생성)
-│   ├── generate_qa.py        # [1.5] (선택) LLM으로 원문에서 QA 자동 생성
-│   ├── train_cpt.py          # [2] Continued Pretraining
-│   ├── train_sft.py          # [3] Supervised Fine-Tuning
-│   ├── generate_tool_calls.py# (선택) LLM으로 툴 호출 데이터 자동 생성
-│   ├── train_tool.py         # (선택) 툴 호출(function calling) 전용 학습
-│   ├── generate_plans.py     # (선택) LLM으로 계획수립 데이터 자동 생성
-│   ├── train_plan.py         # (선택) 계획수립(planning) 전용 학습
-│   ├── generate_react.py     # (선택) LLM으로 ReAct 트레이스 자동 생성
-│   ├── train_react.py        # (선택) 추론형(ReAct) 전용 학습
-│   ├── generate_planact.py   # (선택) LLM으로 계획-실행 궤적 자동 생성
-│   ├── train_planact.py      # (선택) 계획-실행(plan-and-execute) 전용 학습
-│   ├── export_model.py       # [4] LoRA 병합 (16bit / GGUF)
-│   ├── test_model.py         # [5] 학습 결과 확인
-│   ├── generate_preference.py# (선택) 선호 학습 데이터 생성
-│   ├── pref_common.py        # (선택) 선호 학습 트레이너 공용 로직
-│   ├── train_dpo.py          # (선택) DPO — SFT 뒤에 추가
-│   ├── train_orpo.py         # (선택) ORPO — SFT를 대체
-│   └── train_kto.py          # (선택) KTO — 이진 라벨 기반
+├── scripts/                  # 파이프라인 스크립트 (파이썬 패키지, python -m 으로 실행)
+│   ├── lib/                  # 공용 유틸 — common(config·meta), llm_client, pref_common
+│   ├── data/                 # [1] prepare_data — 원문/jsonl → 데이터셋 6종 (없으면 샘플)
+│   ├── generate/             # (선택) LLM 기반 데이터 생성 — generate_{qa,tool_calls,plans,react,planact,preference}
+│   ├── train/                # 학습 — train_{cpt,sft,tool,plan,react,planact,dpo,orpo,kto}
+│   └── model/                # export_model(병합) · test_model(추론 테스트)
+├── api/                      # (선택) 파이프라인 HTTP API (FastAPI) — api/README.md
 └── outputs/                  # 학습 결과물 (자동 생성)
 ```
+
+> 실행은 리포지토리 루트에서 모듈 형식으로: 예) `python -m scripts.train.train_sft`.
 
 ## 설치
 
@@ -109,11 +92,11 @@ bash run_pipeline.sh --skip-export  # 병합 생략 (디스크 절약)
 ### 3. 단계별 실행
 
 ```bash
-python scripts/prepare_data.py    # 데이터 가공
-python scripts/train_cpt.py       # 지식 주입
-python scripts/train_sft.py       # 지시 튜닝
-python scripts/export_model.py    # 병합
-python scripts/test_model.py -q "코어스톤 등급 체계를 설명해줘"
+python -m scripts.data.prepare_data    # 데이터 가공
+python -m scripts.train.train_cpt       # 지식 주입
+python -m scripts.train.train_sft       # 지시 튜닝
+python -m scripts.model.export_model    # 병합
+python -m scripts.model.test_model -q "코어스톤 등급 체계를 설명해줘"
 ```
 
 ### (선택) QA 자동 생성
@@ -124,7 +107,7 @@ python scripts/test_model.py -q "코어스톤 등급 체계를 설명해줘"
 ```bash
 export QA_GEN_BASE_URL=http://localhost:11434/v1
 export QA_GEN_MODEL=qwen2.5:14b
-python scripts/generate_qa.py --per-chunk 3
+python -m scripts.generate.generate_qa --per-chunk 3
 ```
 
 ### (선택) 툴 호출 학습 — function calling
@@ -140,12 +123,12 @@ python scripts/generate_qa.py --per-chunk 3
 # (선택) LLM으로 툴 호출 데이터 자동 생성
 export QA_GEN_BASE_URL=http://localhost:11434/v1
 export QA_GEN_MODEL=qwen2.5:14b
-python scripts/generate_tool_calls.py --per-chunk 2
+python -m scripts.generate.generate_tool_calls --per-chunk 2
 
-python scripts/prepare_data.py          # tools_*.jsonl → tool_dataset.jsonl
-python scripts/train_tool.py            # 지식 SFT 위에 툴 능력 추가
-python scripts/test_model.py --stage tool
-python scripts/export_model.py --stage tool
+python -m scripts.data.prepare_data          # tools_*.jsonl → tool_dataset.jsonl
+python -m scripts.train.train_tool            # 지식 SFT 위에 툴 능력 추가
+python -m scripts.model.test_model --stage tool
+python -m scripts.model.export_model --stage tool
 
 # 전체 파이프라인에 붙이려면:
 bash run_pipeline.sh --with-tool
@@ -167,12 +150,12 @@ bash run_pipeline.sh --with-tool
 # (선택) LLM으로 계획 데이터 자동 생성
 export QA_GEN_BASE_URL=http://localhost:11434/v1
 export QA_GEN_MODEL=qwen2.5:14b
-python scripts/generate_plans.py --per-chunk 2
+python -m scripts.generate.generate_plans --per-chunk 2
 
-python scripts/prepare_data.py          # plans_*.jsonl → plan_dataset.jsonl
-python scripts/train_plan.py            # 지식 SFT 위에 계획 능력 추가
-python scripts/test_model.py --stage plan
-python scripts/export_model.py --stage plan
+python -m scripts.data.prepare_data          # plans_*.jsonl → plan_dataset.jsonl
+python -m scripts.train.train_plan            # 지식 SFT 위에 계획 능력 추가
+python -m scripts.model.test_model --stage plan
+python -m scripts.model.export_model --stage plan
 
 # 전체 파이프라인에 붙이려면:
 bash run_pipeline.sh --with-plan
@@ -195,12 +178,12 @@ bash run_pipeline.sh --with-plan
 # (선택) LLM으로 ReAct 트레이스 자동 생성
 export QA_GEN_BASE_URL=http://localhost:11434/v1
 export QA_GEN_MODEL=qwen2.5:14b
-python scripts/generate_react.py --per-chunk 2
+python -m scripts.generate.generate_react --per-chunk 2
 
-python scripts/prepare_data.py          # react_*.jsonl → react_dataset.jsonl
-python scripts/train_react.py           # 지식 SFT 위에 추론 능력 추가
-python scripts/test_model.py --stage react
-python scripts/export_model.py --stage react
+python -m scripts.data.prepare_data          # react_*.jsonl → react_dataset.jsonl
+python -m scripts.train.train_react           # 지식 SFT 위에 추론 능력 추가
+python -m scripts.model.test_model --stage react
+python -m scripts.model.export_model --stage react
 
 # 전체 파이프라인에 붙이려면:
 bash run_pipeline.sh --with-react
@@ -223,12 +206,12 @@ bash run_pipeline.sh --with-react
 # (선택) LLM으로 계획-실행 궤적 자동 생성
 export QA_GEN_BASE_URL=http://localhost:11434/v1
 export QA_GEN_MODEL=qwen2.5:14b
-python scripts/generate_planact.py --per-chunk 1
+python -m scripts.generate.generate_planact --per-chunk 1
 
-python scripts/prepare_data.py          # planact_*.jsonl → planact_dataset.jsonl
-python scripts/train_planact.py         # 지식 SFT 위에 계획+실행 능력 추가
-python scripts/test_model.py --stage planact
-python scripts/export_model.py --stage planact
+python -m scripts.data.prepare_data          # planact_*.jsonl → planact_dataset.jsonl
+python -m scripts.train.train_planact         # 지식 SFT 위에 계획+실행 능력 추가
+python -m scripts.model.test_model --stage planact
+python -m scripts.model.export_model --stage planact
 
 # 전체 파이프라인에 붙이려면:
 bash run_pipeline.sh --with-planact
@@ -242,10 +225,10 @@ bash run_pipeline.sh --with-planact
 SFT 이후 **환각 억제**나 형식 교정이 필요할 때 추가하는 단계입니다.
 
 ```bash
-python scripts/generate_preference.py   # 선호 데이터 생성 (LLM API 필요)
-python scripts/train_dpo.py             # 또는 train_orpo.py / train_kto.py
-python scripts/test_model.py --stage dpo
-python scripts/export_model.py --stage dpo
+python -m scripts.generate.generate_preference   # 선호 데이터 생성 (LLM API 필요)
+python -m scripts.train.train_dpo             # 또는 train_orpo.py / train_kto.py
+python -m scripts.model.test_model --stage dpo
+python -m scripts.model.export_model --stage dpo
 ```
 
 > ⚠️ **이 단계는 지식을 주입하지 않습니다.** 데이터가 부족하거나 rejected 품질이

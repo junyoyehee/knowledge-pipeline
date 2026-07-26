@@ -4,7 +4,8 @@
 **HTTP API**로 제공하기 위한 설계안입니다. 구현 전에 합의할 아키텍처·리소스·엔드포인트를
 정리합니다. (구현은 아직 하지 않습니다.)
 
-- 상태: **초안(Draft)** — 리뷰 후 확정
+- 상태: **초안(Draft)** — 리뷰 후 확정. **Phase 1(MVP)은 [`api/`](../api/)에 구현됨**
+  (실행법: [api/README.md](../api/README.md)).
 - 대상 독자: 이 파이프라인을 서비스/자동화에 붙이려는 개발자
 - 관련 문서: [meta_info.md](meta_info.md) · [tool_calling.md](tool_calling.md) ·
   [planning.md](planning.md) · [react.md](react.md) · [planact.md](planact.md)
@@ -59,7 +60,7 @@ flowchart LR
     API -->|read/write| FS[(아티팩트 스토리지<br/>raw / processed / outputs)]
     W1[CPU 워커<br/>prepare·generate] -->|dequeue| Q
     W2[GPU 워커<br/>동시성=1<br/>train·export·infer] -->|dequeue| Q
-    W1 & W2 -->|subprocess: python scripts/*.py --config| Sub[기존 파이프라인 스크립트]
+    W1 & W2 -->|subprocess: python -m scripts.<group>.<name> --config| Sub[기존 파이프라인 스크립트]
     Sub --> FS
     W1 & W2 -->|status·logs·metrics| Q
 ```
@@ -71,7 +72,7 @@ API는 요청 파라미터로 **잡별 config.yaml을 생성**하고, 기존 스
 ```
 POST /train {stage:"sft", overrides:{...}}
   → 잡 생성 → {job_dir}/config.yaml 작성(프로젝트 경로 + 기본값 + overrides 병합)
-  → subprocess: python scripts/train_sft.py --config {job_dir}/config.yaml
+  → subprocess: python -m scripts.train.train_sft --config {job_dir}/config.yaml
   → stdout 캡처 → 로그 저장 + "[OK] ... loss: X" 파싱 → 메트릭
   → 종료코드로 성공/실패 판정, outputs/sft/final 을 아티팩트로 등록
 ```
@@ -414,6 +415,9 @@ Job 객체(공통):
 
 **배포(v1)**: 단일 GPU 노드. `api`(FastAPI/uvicorn) + `cpu-worker` + `gpu-worker`
 3개 프로세스, 공유 스토리지(로컬 볼륨) + 메타 DB(SQLite→Postgres).
+
+> **unsloth(GPU)가 원격 호스트일 때**의 배포(원격 GPU 워커 / SSH 러너 / 관리형
+> 스케줄러)는 [remote_unsloth.md](remote_unsloth.md)에 별도 정리되어 있습니다.
 
 **Phase 구분**
 - **Phase 1 (MVP)**: 프로젝트·파일·prepare·generate·train·export·jobs·infer(잡).

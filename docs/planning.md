@@ -73,7 +73,7 @@ CPT (지식 축적) ──► SFT (지식 활용) ──► [plan] 계획수립 
 `data/raw/plans_운영계획.jsonl` 처럼 넣고 `prepare_data.py`를 돌립니다.
 
 ```bash
-python scripts/prepare_data.py
+python -m scripts.data.prepare_data
 # [OK] 계획수립 데이터셋: N개 계획 → data/processed/plan_dataset.jsonl
 ```
 
@@ -84,7 +84,7 @@ python scripts/prepare_data.py
 ```bash
 export QA_GEN_BASE_URL="http://localhost:11434/v1"
 export QA_GEN_MODEL="qwen2.5:14b"
-python scripts/generate_plans.py --per-chunk 2
+python -m scripts.generate.generate_plans --per-chunk 2
 ```
 
 LLM에게 `{goal, steps}` 평면 형식으로 받은 뒤 **`prepare_data.py`와 동일한 검증기**를
@@ -98,7 +98,7 @@ LLM에게 `{goal, steps}` 평면 형식으로 받은 뒤 **`prepare_data.py`와 
 ## 3. 학습
 
 ```bash
-python scripts/train_plan.py
+python -m scripts.train.train_plan
 ```
 
 - 시작 지점은 `config.yaml`의 `plan.init_from`으로 정합니다.
@@ -115,10 +115,10 @@ python scripts/train_plan.py
 ## 4. 테스트 · 병합
 
 ```bash
-python scripts/test_model.py --stage plan
-python scripts/test_model.py --stage plan -q "축제 준비 계획을 세워줘"
+python -m scripts.model.test_model --stage plan
+python -m scripts.model.test_model --stage plan -q "축제 준비 계획을 세워줘"
 
-python scripts/export_model.py --stage plan
+python -m scripts.model.export_model --stage plan
 ```
 
 전체 파이프라인에 붙이려면:
