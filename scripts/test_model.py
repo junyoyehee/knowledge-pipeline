@@ -11,6 +11,7 @@
     python scripts/test_model.py --stage tool --tools data/raw/tools_catalog.json
     python scripts/test_model.py --stage plan             # 계획수립 테스트
     python scripts/test_model.py --stage plan -q "축제 준비 계획 세워줘"
+    python scripts/test_model.py --stage react            # 추론형(ReAct) 테스트
 """
 import argparse
 import json
@@ -63,7 +64,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
     parser.add_argument("--stage",
-                        choices=["sft", "cpt", "tool", "plan", "dpo", "orpo", "kto"],
+                        choices=["sft", "cpt", "tool", "plan", "react",
+                                 "dpo", "orpo", "kto"],
                         default="sft")
     parser.add_argument("-q", "--question", action="append", default=None,
                         help="직접 질문 (여러 번 지정 가능)")
@@ -96,6 +98,7 @@ def main():
     stage_source = {
         "tool": cfg["data"].get("tool_dataset"),
         "plan": cfg["data"].get("plan_dataset"),
+        "react": cfg["data"].get("react_dataset"),
     }
     questions = args.question
     if not questions:
@@ -105,7 +108,7 @@ def main():
             questions = ["학습한 도메인 지식에 대해 설명해주세요."]
 
     # 학습 때와 동일한 system 프롬프트를 사용해야 함 (train/serve 불일치 방지)
-    stage_key = args.stage if args.stage in ("tool", "plan") else "sft"
+    stage_key = args.stage if args.stage in ("tool", "plan", "react") else "sft"
     system_prompt = cfg.get(stage_key, {}).get("system_prompt")
 
     for q in questions:
