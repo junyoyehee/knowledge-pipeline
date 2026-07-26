@@ -69,27 +69,20 @@ def _rebuild_message(m: dict) -> dict:
     return mm
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=None)
-    args = parser.parse_args()
-    cfg = load_config(args.config)
+def train_tool_style(cfg: dict, stage_cfg: dict, dataset_path: str,
+                     stage_name: str):
+    """{messages, tools} 형식 데이터셋을 학습하는 공용 로직.
 
-    mcfg, stage_cfg = cfg["model"], cfg["tool"]
-    tcfg = stage_cfg["train"]
-
-    tool_path = cfg["data"].get("tool_dataset")
-    if not tool_path or not os.path.exists(tool_path):
-        raise SystemExit(
-            f"툴 호출 데이터셋이 없습니다: {tool_path}\n"
-            "tools_*.jsonl을 넣고 prepare_data.py를 돌리거나, "
-            "generate_tool_calls.py로 먼저 생성하세요.")
-
-    model, tokenizer = load_stage_model(cfg, stage_cfg, "tool")
+    tool 단계와 planact(계획-실행) 단계가 완전히 같은 데이터 형식을 쓰므로
+    두 스크립트가 이 함수를 공유한다. tools/arguments를 dict로 복원해 채팅
+    템플릿에 tools와 함께 넣고, 응답(tool_call + 최종 답변)에만 loss를 건다.
+    """
+    mcfg, tcfg = cfg["model"], stage_cfg["train"]
+    model, tokenizer = load_stage_model(cfg, stage_cfg, stage_name)
     template_name = mcfg["chat_template"]
 
     # ---------- 데이터셋 ----------
-    dataset = load_dataset("json", data_files=tool_path, split="train")
+    dataset = load_dataset("json", data_files=dataset_path, split="train")
     default_system = stage_cfg.get("system_prompt")
 
     def to_text(examples):
@@ -105,7 +98,7 @@ def main():
 
     dataset = dataset.map(to_text, batched=True,
                           remove_columns=dataset.column_names)
-    print(f"[i] TOOL 학습 샘플 수: {len(dataset)}")
+    print(f"[i] {stage_name.upper()} 학습 샘플 수: {len(dataset)}")
 
     # ---------- 학습 ----------
     trainer = SFTTrainer(
@@ -147,11 +140,27 @@ def main():
                   "전체 시퀀스로 학습합니다. common.py의 TEMPLATE_PARTS에 추가하세요.")
 
     stats = trainer.train()
-    print(f"[OK] TOOL 완료 — loss: {stats.training_loss:.4f}")
-    print("[i] 병합하려면 export_model.py --stage tool, "
-          "테스트는 test_model.py --stage tool 를 쓰세요.")
+    print(f"[OK] {stage_name.upper()} 완료 — loss: {stats.training_loss:.4f}")
+    print(f"[i] 병합하려면 export_model.py --stage {stage_name}, "
+          f"테스트는 test_model.py --stage {stage_name} 를 쓰세요.")
 
-    save_adapter(model, tokenizer, stage_cfg["output_dir"], "tool")
+    save_adapter(model, tokenizer, stage_cfg["output_dir"], stage_name)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=None)
+    args = parser.parse_args()
+    cfg = load_config(args.config)
+
+    tool_path = cfg["data"].get("tool_dataset")
+    if not tool_path or not os.path.exists(tool_path):
+        raise SystemExit(
+            f"툴 호출 데이터셋이 없습니다: {tool_path}\n"
+            "tools_*.jsonl을 넣고 prepare_data.py를 돌리거나, "
+            "generate_tool_calls.py로 먼저 생성하세요.")
+
+    train_tool_style(cfg, cfg["tool"], tool_path, "tool")
 
 
 if __name__ == "__main__":

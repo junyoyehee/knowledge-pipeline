@@ -18,12 +18,13 @@ def load_config(config_path: str = None) -> dict:
 
     # 경로 필드를 절대 경로로 변환
     for key in ("raw_dir", "cpt_dataset", "sft_dataset", "tool_dataset",
-                "plan_dataset", "react_dataset", "pref_dataset", "kto_dataset"):
+                "plan_dataset", "react_dataset", "planact_dataset",
+                "pref_dataset", "kto_dataset"):
         if cfg["data"].get(key):
             cfg["data"][key] = _abs(cfg["data"][key])
     cfg["cpt"]["output_dir"] = _abs(cfg["cpt"]["output_dir"])
     cfg["sft"]["output_dir"] = _abs(cfg["sft"]["output_dir"])
-    for optional_stage in ("tool", "plan", "react"):
+    for optional_stage in ("tool", "plan", "react", "planact"):
         if cfg.get(optional_stage):
             cfg[optional_stage]["output_dir"] = _abs(cfg[optional_stage]["output_dir"])
     cfg["export"]["merged_dir"] = _abs(cfg["export"]["merged_dir"])
@@ -34,7 +35,7 @@ def load_config(config_path: str = None) -> dict:
 
 def stage_adapter(cfg: dict, stage: str) -> str:
     """단계 이름 → 해당 단계의 최종 어댑터 디렉터리 경로."""
-    if stage in ("cpt", "sft", "tool", "plan", "react"):
+    if stage in ("cpt", "sft", "tool", "plan", "react", "planact"):
         if stage not in cfg:
             raise ValueError(f"config에 '{stage}' 설정이 없습니다.")
         return os.path.join(cfg[stage]["output_dir"], "final")

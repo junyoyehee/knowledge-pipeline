@@ -30,6 +30,8 @@ data:
   plan_dataset: "data/processed/plan_dataset.jsonl" # 목표 → 단계별 계획 (messages)
   # 추론형(ReAct) 학습용 (선택) — 자세한 내용은 docs/react.md
   react_dataset: "data/processed/react_dataset.jsonl" # Thought/Action/Observation 트레이스
+  # 계획-실행(plan-and-execute) 학습용 (선택) — 자세한 내용은 docs/planact.md
+  planact_dataset: "data/processed/planact_dataset.jsonl" # 계획 + tool_calls 실행 궤적
   # 선호 학습용 (선택) — generate_preference.py로 생성. 자세한 내용은 docs/preference_tuning.md
   pref_dataset: "data/processed/pref_dataset.jsonl" # DPO/ORPO 공용 (prompt/chosen/rejected)
   kto_dataset: "data/processed/kto_dataset.jsonl"   # KTO 전용 (prompt/completion/label)
@@ -204,6 +206,41 @@ react:
     train_on_responses_only: true
 
 # =========================================================
+# 계획-실행(plan-and-execute) 학습 (선택 단계) — 반드시 docs/planact.md를 먼저 읽으세요
+# 목표를 받아 (1) 계획을 세우고 (2) 각 단계를 실제 tool_call로 실행하며 (3) 관찰을
+# 종합해 최종 답변까지 내는 에이전트형 궤적을 학습합니다. 툴 호출 데이터 형식의 확장.
+# 데이터 형식: {"tools": [...], "goal": "...", "plan": ["1","2"],
+#              "steps": [{"tool": "...", "arguments": {...}, "observation": "..."}], "final_answer": "..."}
+# =========================================================
+planact:
+  output_dir: "outputs/planact"
+  # 어디서 시작할지: "sft"(기본) / "tool" / "cpt" / "base" / 병합모델 경로
+  #   "sft"  → 지식 SFT 위에 계획+실행 능력을 함께 학습 (권장, 자립적)
+  #   "tool" → 이미 학습한 툴 호출 어댑터 위에 계획 능력을 얹고 싶을 때
+  init_from: "sft"
+  # 데이터에 system이 없을 때 붙일 기본 system 프롬프트. null이면 미사용.
+  # 예: "너는 목표를 받으면 먼저 계획을 세우고 도구를 호출해 실행하는 에이전트다."
+  system_prompt: null
+  lora:                            # init_from이 경로/base일 때만 새 어댑터 생성에 사용
+    r: 32
+    alpha: 32
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  train:
+    num_epochs: 3
+    per_device_batch_size: 2
+    gradient_accumulation_steps: 8
+    learning_rate: 1.0e-4
+    warmup_ratio: 0.05
+    lr_scheduler_type: "linear"
+    weight_decay: 0.01
+    logging_steps: 5
+    save_steps: 100
+    seed: 42
+    # 응답(계획+tool_call, 최종 답변)만 loss 계산. tool 결과는 마스킹됨.
+    train_on_responses_only: true
+
+# =========================================================
 # 선호 학습 (선택 단계) — 반드시 docs/preference_tuning.md를 먼저 읽으세요
 # 지식 주입 효과는 없습니다. 환각 억제·형식 교정용입니다.
 # 데이터가 부족한 상태로 돌리면 모델이 오히려 나빠집니다.
@@ -293,7 +330,7 @@ preference:
 
 # ---------- 최종 저장 ----------
 export:
-  # 병합할 어댑터 단계: "sft" / "tool" / "plan" / "react" / "dpo" / "orpo" / "kto"
+  # 병합할 어댑터 단계: "sft" / "tool" / "plan" / "react" / "planact" / "dpo" / "orpo" / "kto"
   source_stage: "sft"
   merged_dir: "outputs/final_model"   # LoRA 병합된 16bit 모델
   save_gguf: false                    # true면 GGUF(q4_k_m)도 저장 (llama.cpp/ollama용)
