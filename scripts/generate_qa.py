@@ -16,10 +16,9 @@
 import argparse
 import json
 import os
-import re
-import urllib.request
 
 from common import load_config, messages_hash
+from llm_client import call_llm, extract_json_array, resolve_env
 
 PROMPT_TEMPLATE = """다음 문서 내용을 바탕으로, 문서에 담긴 지식을 확인하는 질문-답변 쌍을 {n}개 만들어주세요.
 
@@ -35,34 +34,10 @@ PROMPT_TEMPLATE = """다음 문서 내용을 바탕으로, 문서에 담긴 지�
 ---"""
 
 
-def call_llm(base_url: str, api_key: str, model: str, prompt: str) -> str:
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key}"},
-    )
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"]
-
-
 def extract_qa_pairs(text: str) -> list:
     """LLM 응답에서 JSON 배열을 추출해 OpenAI messages 형식으로 변환."""
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    if not match:
-        return []
-    try:
-        items = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return []
     result = []
-    for item in items:
+    for item in extract_json_array(text):
         if not isinstance(item, dict):
             continue
         q, a = item.get("question"), item.get("answer")
@@ -85,15 +60,7 @@ def main():
     args = parser.parse_args()
     cfg = load_config(args.config)
 
-    base_url = os.environ.get("QA_GEN_BASE_URL")
-    api_key = os.environ.get("QA_GEN_API_KEY", "dummy")
-    model = os.environ.get("QA_GEN_MODEL")
-    if not base_url or not model:
-        raise SystemExit(
-            "QA_GEN_BASE_URL / QA_GEN_MODEL 환경변수를 설정하세요.\n"
-            "예) export QA_GEN_BASE_URL=http://localhost:11434/v1\n"
-            "    export QA_GEN_MODEL=qwen2.5:14b"
-        )
+    base_url, api_key, model = resolve_env()
 
     cpt_path = cfg["data"]["cpt_dataset"]
     if not os.path.exists(cpt_path):

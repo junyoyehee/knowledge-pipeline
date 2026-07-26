@@ -19,20 +19,28 @@ QA jsonl      messages로 정규화     embed/lm_head 학습        응답만 lo
 ```
 knowledge-pipeline/
 ├── configs/config.yaml       # 모든 설정 (모델, 하이퍼파라미터, 경로)
-├── docs/meta_info.md         # 데이터셋 meta 필드 의미와 활용법
+├── docs/
+│   ├── meta_info.md          # 데이터셋 meta 필드 의미와 활용법
+│   └── preference_tuning.md  # DPO/ORPO/KTO 가이드 — 쓰기 전 필독
 ├── requirements.txt
 ├── run_pipeline.sh           # 전체 파이프라인 원클릭 실행
 ├── data/
 │   ├── raw/                  # ← 여기에 원문(.txt/.md)과 qa_*.jsonl을 넣으세요
 │   └── processed/            # 가공된 학습 데이터 (자동 생성)
 ├── scripts/
-│   ├── common.py             # config 로더
+│   ├── common.py             # config 로더, 메타정보 유틸
+│   ├── llm_client.py         # OpenAI 호환 API 클라이언트 (데이터 생성 공용)
 │   ├── prepare_data.py       # [1] 원문 → CPT/SFT 데이터셋 (없으면 샘플 생성)
 │   ├── generate_qa.py        # [1.5] (선택) LLM으로 원문에서 QA 자동 생성
 │   ├── train_cpt.py          # [2] Continued Pretraining
 │   ├── train_sft.py          # [3] Supervised Fine-Tuning
 │   ├── export_model.py       # [4] LoRA 병합 (16bit / GGUF)
-│   └── test_model.py         # [5] 학습 결과 확인
+│   ├── test_model.py         # [5] 학습 결과 확인
+│   ├── generate_preference.py# (선택) 선호 학습 데이터 생성
+│   ├── pref_common.py        # (선택) 선호 학습 트레이너 공용 로직
+│   ├── train_dpo.py          # (선택) DPO — SFT 뒤에 추가
+│   ├── train_orpo.py         # (선택) ORPO — SFT를 대체
+│   └── train_kto.py          # (선택) KTO — 이진 라벨 기반
 └── outputs/                  # 학습 결과물 (자동 생성)
 ```
 
@@ -107,6 +115,23 @@ export QA_GEN_MODEL=qwen2.5:14b
 python scripts/generate_qa.py --per-chunk 3
 ```
 
+### (선택) 선호 학습 — DPO / ORPO / KTO
+
+SFT 이후 **환각 억제**나 형식 교정이 필요할 때 추가하는 단계입니다.
+
+```bash
+python scripts/generate_preference.py   # 선호 데이터 생성 (LLM API 필요)
+python scripts/train_dpo.py             # 또는 train_orpo.py / train_kto.py
+python scripts/test_model.py --stage dpo
+python scripts/export_model.py --stage dpo
+```
+
+> ⚠️ **이 단계는 지식을 주입하지 않습니다.** 데이터가 부족하거나 rejected 품질이
+> 나쁘면 모델이 오히려 나빠집니다. 실행 전
+> **[docs/preference_tuning.md](docs/preference_tuning.md)를 반드시 읽으세요.**
+> 언제 쓰면 안 되는지, rejected를 어떻게 만들어야 하는지, 학습 후 무엇을
+> 확인해야 하는지가 정리되어 있습니다.
+
 ## 주요 설정 (configs/config.yaml)
 
 | 항목 | 설명 |
@@ -119,7 +144,9 @@ python scripts/generate_qa.py --per-chunk 3
 | `cpt.train.embedding_learning_rate` | embed/lm_head 학습률 — 본체의 1/5~1/10 유지 |
 | `sft.continue_from_cpt` | CPT 어댑터를 이어받을지 여부 |
 | `sft.system_prompt` | 데이터에 system이 없을 때 붙일 기본 system 프롬프트. `null`이면 미사용. 학습·추론에 동일 적용됨 |
+| `export.source_stage` | 병합할 단계 (`sft`/`dpo`/`orpo`/`kto`). ORPO를 썼다면 반드시 변경 |
 | `export.save_gguf` | Ollama/llama.cpp용 GGUF 저장 여부 |
+| `preference.*` | 선호 학습 설정. [docs/preference_tuning.md](docs/preference_tuning.md) 참고 |
 
 ## VRAM 부족(OOM) 시 체크리스트
 

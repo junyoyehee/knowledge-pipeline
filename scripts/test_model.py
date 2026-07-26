@@ -15,13 +15,15 @@ import os
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template
 
-from common import load_config
+from common import load_config, stage_adapter
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
-    parser.add_argument("--stage", choices=["sft", "cpt"], default="sft")
+    parser.add_argument("--stage",
+                        choices=["sft", "cpt", "dpo", "orpo", "kto"],
+                        default="sft")
     parser.add_argument("-q", "--question", action="append", default=None,
                         help="직접 질문 (여러 번 지정 가능)")
     parser.add_argument("--max-new-tokens", type=int, default=512)
@@ -29,10 +31,10 @@ def main():
     cfg = load_config(args.config)
 
     mcfg = cfg["model"]
-    stage_dir = cfg["sft" if args.stage == "sft" else "cpt"]["output_dir"]
-    adapter = os.path.join(stage_dir, "final")
+    adapter = stage_adapter(cfg, args.stage)
     if not os.path.isdir(adapter):
         raise SystemExit(f"어댑터가 없습니다: {adapter}")
+    print(f"[i] 테스트 대상: {args.stage} → {adapter}")
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=adapter,

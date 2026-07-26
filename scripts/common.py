@@ -16,12 +16,25 @@ def load_config(config_path: str = None) -> dict:
         cfg = yaml.safe_load(f)
 
     # 경로 필드를 절대 경로로 변환
-    for key in ("raw_dir", "cpt_dataset", "sft_dataset"):
-        cfg["data"][key] = _abs(cfg["data"][key])
+    for key in ("raw_dir", "cpt_dataset", "sft_dataset", "pref_dataset", "kto_dataset"):
+        if cfg["data"].get(key):
+            cfg["data"][key] = _abs(cfg["data"][key])
     cfg["cpt"]["output_dir"] = _abs(cfg["cpt"]["output_dir"])
     cfg["sft"]["output_dir"] = _abs(cfg["sft"]["output_dir"])
     cfg["export"]["merged_dir"] = _abs(cfg["export"]["merged_dir"])
+    for stage in cfg.get("preference", {}).values():
+        stage["output_dir"] = _abs(stage["output_dir"])
     return cfg
+
+
+def stage_adapter(cfg: dict, stage: str) -> str:
+    """단계 이름 → 해당 단계의 최종 어댑터 디렉터리 경로."""
+    if stage in ("cpt", "sft"):
+        return os.path.join(cfg[stage]["output_dir"], "final")
+    pref = cfg.get("preference", {})
+    if stage in pref:
+        return os.path.join(pref[stage]["output_dir"], "final")
+    raise ValueError(f"알 수 없는 단계: {stage}")
 
 
 def _abs(path: str) -> str:

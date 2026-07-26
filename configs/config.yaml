@@ -24,6 +24,9 @@ data:
   raw_dir: "data/raw"                          # 원문 문서 (.txt / .md)
   cpt_dataset: "data/processed/cpt_dataset.jsonl"   # CPT용 (text 필드)
   sft_dataset: "data/processed/sft_dataset.jsonl"   # SFT용 (messages 필드, OpenAI 형식)
+  # 선호 학습용 (선택) — generate_preference.py로 생성. 자세한 내용은 docs/preference_tuning.md
+  pref_dataset: "data/processed/pref_dataset.jsonl" # DPO/ORPO 공용 (prompt/chosen/rejected)
+  kto_dataset: "data/processed/kto_dataset.jsonl"   # KTO 전용 (prompt/completion/label)
   # 원문을 청크로 자를 때 설정
   chunk_size: 2000              # 문자 수 기준 청크 크기
   chunk_overlap: 200            # 청크 간 겹침 (문맥 유지)
@@ -94,8 +97,98 @@ sft:
     # 응답 부분만 loss 계산 (질문 부분은 마스킹)
     train_on_responses_only: true
 
+# =========================================================
+# 선호 학습 (선택 단계) — 반드시 docs/preference_tuning.md를 먼저 읽으세요
+# 지식 주입 효과는 없습니다. 환각 억제·형식 교정용입니다.
+# 데이터가 부족한 상태로 돌리면 모델이 오히려 나빠집니다.
+# =========================================================
+preference:
+  # ---------- DPO: SFT 뒤에 붙이는 표준 선호 학습 ----------
+  dpo:
+    output_dir: "outputs/dpo"
+    # 어디서 시작할지: "sft" / "cpt" / "base" / 병합모델 경로(예: "outputs/final_model")
+    #   "sft"  → SFT 어댑터를 이어서 학습. reference는 베이스 모델이 됨 (간편, VRAM 절약)
+    #   경로   → 그 모델 위에 새 LoRA. reference가 정확히 SFT 모델이 됨 (정석)
+    # 두 방식의 차이는 docs/preference_tuning.md의 "reference 모델" 절 참고
+    init_from: "sft"
+    lora:                         # init_from이 경로/base일 때만 사용 (새 어댑터 생성)
+      r: 32
+      alpha: 32
+      dropout: 0.0
+      target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    train:
+      beta: 0.1                   # KL 제약 강도. 낮을수록 공격적, 높을수록 보수적 (0.1~0.5)
+      num_epochs: 1               # 선호 학습은 1 epoch면 충분한 경우가 많음
+      per_device_batch_size: 1    # 한 스텝에 chosen+rejected 둘 다 올라가므로 SFT보다 작게
+      gradient_accumulation_steps: 8
+      learning_rate: 5.0e-6       # SFT보다 훨씬 낮게. 높이면 쉽게 붕괴함
+      warmup_ratio: 0.1
+      lr_scheduler_type: "cosine"
+      weight_decay: 0.0
+      max_length: 2048            # prompt+응답 전체 길이 상한
+      max_prompt_length: 1024
+      logging_steps: 5
+      save_steps: 100
+      seed: 42
+
+  # ---------- ORPO: SFT를 대체하는 단일 단계 (reference 모델 불필요) ----------
+  orpo:
+    output_dir: "outputs/orpo"
+    # ORPO는 SFT 역할까지 겸하므로 보통 CPT 어댑터에서 시작
+    init_from: "cpt"
+    lora:
+      r: 32
+      alpha: 32
+      dropout: 0.0
+      target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    train:
+      beta: 0.1                   # ORPO의 lambda(odds ratio 항 가중치)
+      num_epochs: 2               # SFT를 겸하므로 DPO보다 많이
+      per_device_batch_size: 1
+      gradient_accumulation_steps: 8
+      learning_rate: 8.0e-6
+      warmup_ratio: 0.1
+      lr_scheduler_type: "linear"
+      weight_decay: 0.0
+      max_length: 2048
+      max_prompt_length: 1024
+      logging_steps: 5
+      save_steps: 100
+      seed: 42
+
+  # ---------- KTO: 쌍이 아닌 개별 좋음/나쁨 라벨로 학습 ----------
+  kto:
+    output_dir: "outputs/kto"
+    init_from: "sft"
+    lora:
+      r: 32
+      alpha: 32
+      dropout: 0.0
+      target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    train:
+      beta: 0.1
+      # 좋음/나쁨 샘플 수가 불균형할 때 손실 가중치로 보정
+      # 권장: (desirable_weight * n_desirable) / (undesirable_weight * n_undesirable) ≈ 1.0~1.33
+      # train_kto.py가 실제 비율을 계산해 경고해 줍니다
+      desirable_weight: 1.0
+      undesirable_weight: 1.0
+      num_epochs: 1
+      per_device_batch_size: 2
+      gradient_accumulation_steps: 8
+      learning_rate: 5.0e-6
+      warmup_ratio: 0.1
+      lr_scheduler_type: "cosine"
+      weight_decay: 0.0
+      max_length: 2048
+      max_prompt_length: 1024
+      logging_steps: 5
+      save_steps: 100
+      seed: 42
+
 # ---------- 최종 저장 ----------
 export:
+  # 병합할 어댑터 단계: "sft" / "dpo" / "orpo" / "kto"
+  source_stage: "sft"
   merged_dir: "outputs/final_model"   # LoRA 병합된 16bit 모델
   save_gguf: false                    # true면 GGUF(q4_k_m)도 저장 (llama.cpp/ollama용)
   gguf_quantization: "q4_k_m"
