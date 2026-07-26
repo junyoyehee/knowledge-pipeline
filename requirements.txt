@@ -1,0 +1,13 @@
+# unsloth는 CUDA/torch 버전에 맞춰 설치하는 것을 권장:
+#   pip install unsloth
+# (torch가 이미 설치된 환경이면 그대로 사용됨)
+unsloth
+torch>=2.4.0
+transformers>=4.46.0
+datasets>=2.20.0
+trl>=0.12.0
+peft>=0.13.0
+accelerate>=1.0.0
+bitsandbytes>=0.44.0
+sentencepiece
+pyyaml

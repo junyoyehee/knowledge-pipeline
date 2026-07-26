@@ -1,0 +1,119 @@
+# 지식축적형 학습 파이프라인 (unsloth)
+
+새로운 도메인 지식을 LLM에 주입하는 2단계 학습 파이프라인입니다.
+
+```
+원문 문서 ──► [1] 데이터 준비 ──► [2] CPT (지식 주입) ──► [3] SFT (지시 튜닝) ──► [4] 병합 ──► [5] 테스트
+(txt/md)      청크 분할            원문 이어서 사전학습      QA로 대화형 튜닝        16bit/GGUF
+QA jsonl      QA 정규화            embed/lm_head 학습        응답만 loss 계산
+```
+
+**왜 2단계인가?** SFT만으로는 모델이 "답변 형식"만 배우고 지식 자체는 잘 흡수하지
+못합니다. CPT로 원문을 이어서 사전학습해 지식을 파라미터에 축적한 뒤, SFT로 그
+지식을 대화 형태로 꺼내 쓰도록 만드는 것이 unsloth 공식 권장 방식입니다.
+핵심은 CPT 단계에서 `embed_tokens`/`lm_head`까지 학습하고, 이 둘의 학습률을
+본체보다 낮게(`embedding_learning_rate`) 주는 것입니다.
+
+## 디렉터리 구조
+
+```
+knowledge-pipeline/
+├── configs/config.yaml       # 모든 설정 (모델, 하이퍼파라미터, 경로)
+├── requirements.txt
+├── run_pipeline.sh           # 전체 파이프라인 원클릭 실행
+├── data/
+│   ├── raw/                  # ← 여기에 원문(.txt/.md)과 qa_*.jsonl을 넣으세요
+│   └── processed/            # 가공된 학습 데이터 (자동 생성)
+├── scripts/
+│   ├── common.py             # config 로더
+│   ├── prepare_data.py       # [1] 원문 → CPT/SFT 데이터셋 (없으면 샘플 생성)
+│   ├── generate_qa.py        # [1.5] (선택) LLM으로 원문에서 QA 자동 생성
+│   ├── train_cpt.py          # [2] Continued Pretraining
+│   ├── train_sft.py          # [3] Supervised Fine-Tuning
+│   ├── export_model.py       # [4] LoRA 병합 (16bit / GGUF)
+│   └── test_model.py         # [5] 학습 결과 확인
+└── outputs/                  # 학습 결과물 (자동 생성)
+```
+
+## 설치
+
+```bash
+pip install -r requirements.txt
+# 또는 최소한으로:
+pip install unsloth
+```
+
+CUDA GPU가 필요합니다. 24GB 이하 GPU(RTX 3090/4090 등) 기준으로 4bit QLoRA
+설정이 기본값입니다.
+
+## 사용법
+
+### 1. 데이터 넣기
+
+`data/raw/`에 도메인 원문 문서(`.txt`, `.md`)를 넣습니다.
+QA 쌍이 있으면 `qa_이름.jsonl`로 넣습니다 (한 줄에 하나):
+
+```json
+{"instruction": "질문", "output": "답변"}
+```
+
+`question`/`answer`, `prompt`/`response` 필드명도 자동 인식됩니다.
+**아무 데이터도 없으면 샘플 데이터(가상 게임 세계관)가 자동 생성**되어
+파이프라인 동작을 바로 확인할 수 있습니다.
+
+### 2. 전체 실행
+
+```bash
+bash run_pipeline.sh              # 전체: 데이터→CPT→SFT→병합→테스트
+bash run_pipeline.sh --skip-export  # 병합 생략 (디스크 절약)
+```
+
+### 3. 단계별 실행
+
+```bash
+python scripts/prepare_data.py    # 데이터 가공
+python scripts/train_cpt.py       # 지식 주입
+python scripts/train_sft.py       # 지시 튜닝
+python scripts/export_model.py    # 병합
+python scripts/test_model.py -q "코어스톤 등급 체계를 설명해줘"
+```
+
+### (선택) QA 자동 생성
+
+원문만 있고 QA가 없다면, OpenAI 호환 API(vLLM/Ollama/사내 게이트웨이)로
+청크별 QA를 자동 생성할 수 있습니다:
+
+```bash
+export QA_GEN_BASE_URL=http://localhost:11434/v1
+export QA_GEN_MODEL=qwen2.5:14b
+python scripts/generate_qa.py --per-chunk 3
+```
+
+## 주요 설정 (configs/config.yaml)
+
+| 항목 | 설명 |
+|---|---|
+| `model.name` | 베이스 모델. unsloth 지원 모델 아무거나 (Qwen2.5, Llama3.1, EXAONE 등) |
+| `model.chat_template` | SFT용 채팅 템플릿. 모델에 맞게 변경 (`qwen-2.5`, `llama-3.1`, `chatml`) |
+| `model.max_seq_length` | VRAM 부족 시 2048로 축소 |
+| `cpt.lora.r` | CPT rank. 지식량이 많으면 128~256, 적으면 64 |
+| `cpt.train.num_epochs` | 지식 주입 반복 횟수. 데이터가 적으면 3~10 |
+| `cpt.train.embedding_learning_rate` | embed/lm_head 학습률 — 본체의 1/5~1/10 유지 |
+| `sft.continue_from_cpt` | CPT 어댑터를 이어받을지 여부 |
+| `export.save_gguf` | Ollama/llama.cpp용 GGUF 저장 여부 |
+
+## VRAM 부족(OOM) 시 체크리스트
+
+1. `model.max_seq_length`: 4096 → 2048
+2. `per_device_batch_size`: 2 → 1 (`gradient_accumulation_steps`를 2배로)
+3. `cpt.lora.r`: 128 → 64
+4. 더 작은 베이스 모델 사용 (7B → 3B)
+
+## 팁
+
+- **지식 축적 품질은 CPT 데이터 반복 노출에 비례**합니다. 같은 지식을 다른
+  표현으로 여러 번 담은 문서(요약본, 상세본, 목록형)를 함께 넣으면 좋습니다.
+- SFT용 QA는 청크당 3개 이상, 같은 지식을 다른 각도로 묻는 질문이 효과적입니다.
+- 일반 능력 손실(catastrophic forgetting)이 우려되면 CPT 데이터에 일반 코퍼스를
+  10~30% 섞으세요.
+- 학습 후 `test_model.py --stage cpt`로 CPT만의 효과도 따로 확인할 수 있습니다.

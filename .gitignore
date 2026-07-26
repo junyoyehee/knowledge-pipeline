@@ -1,0 +1,12 @@
+# 학습 산출물 (LoRA 어댑터, 체크포인트, 병합 모델)
+outputs/
+
+# 가공된 학습 데이터 (prepare_data.py로 재생성 가능)
+data/processed/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
