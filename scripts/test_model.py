@@ -12,6 +12,7 @@
     python scripts/test_model.py --stage plan             # 계획수립 테스트
     python scripts/test_model.py --stage plan -q "축제 준비 계획 세워줘"
     python scripts/test_model.py --stage react            # 추론형(ReAct) 테스트
+    python scripts/test_model.py --stage planact          # 계획-실행 테스트 (함수 스키마 제공)
 """
 import argparse
 import json
@@ -23,20 +24,22 @@ from unsloth.chat_templates import get_chat_template
 from common import load_config, stage_adapter
 
 
-def load_test_tools(args, cfg):
-    """tool 스테이지 테스트용 함수 스키마를 로드 (없으면 None)."""
+def load_test_tools(args, cfg, dataset_path):
+    """tool/planact 스테이지 테스트용 함수 스키마를 로드 (없으면 None).
+
+    --tools가 있으면 그 파일에서, 없으면 해당 데이터셋 첫 줄의 tools에서 읽는다.
+    """
     if args.tools:
         with open(args.tools, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data.get("tools") if isinstance(data, dict) else data
-    tool_path = cfg["data"].get("tool_dataset")
-    if tool_path and os.path.exists(tool_path):
-        with open(tool_path, "r", encoding="utf-8") as f:
+    if dataset_path and os.path.exists(dataset_path):
+        with open(dataset_path, "r", encoding="utf-8") as f:
             first = f.readline().strip()
         if first:
             t = json.loads(first).get("tools")
             return json.loads(t) if isinstance(t, str) else t
-    print("[!] 함수 스키마를 찾지 못했습니다. --tools로 지정하거나 tool_dataset을 먼저 만드세요.")
+    print("[!] 함수 스키마를 찾지 못했습니다. --tools로 지정하거나 데이터셋을 먼저 만드세요.")
     return None
 
 
@@ -64,7 +67,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
     parser.add_argument("--stage",
-                        choices=["sft", "cpt", "tool", "plan", "react",
+                        choices=["sft", "cpt", "tool", "plan", "react", "planact",
                                  "dpo", "orpo", "kto"],
                         default="sft")
     parser.add_argument("-q", "--question", action="append", default=None,
@@ -91,15 +94,18 @@ def main():
     tokenizer = get_chat_template(tokenizer, chat_template=mcfg["chat_template"])
     FastLanguageModel.for_inference(model)  # 2배 빠른 추론 모드
 
-    # tool 스테이지는 함수 스키마를 프롬프트에 넣어야 툴 호출이 나온다
-    tools = load_test_tools(args, cfg) if args.stage == "tool" else None
-
     # 질문 목록 구성 (스테이지별 데이터셋의 첫 user 발화를 자동 추출)
     stage_source = {
         "tool": cfg["data"].get("tool_dataset"),
         "plan": cfg["data"].get("plan_dataset"),
         "react": cfg["data"].get("react_dataset"),
+        "planact": cfg["data"].get("planact_dataset"),
     }
+
+    # tool/planact 스테이지는 함수 스키마를 프롬프트에 넣어야 도구 호출이 나온다
+    tools = (load_test_tools(args, cfg, stage_source.get(args.stage))
+             if args.stage in ("tool", "planact") else None)
+
     questions = args.question
     if not questions:
         source = stage_source.get(args.stage) or cfg["data"]["sft_dataset"]
@@ -108,7 +114,8 @@ def main():
             questions = ["학습한 도메인 지식에 대해 설명해주세요."]
 
     # 학습 때와 동일한 system 프롬프트를 사용해야 함 (train/serve 불일치 방지)
-    stage_key = args.stage if args.stage in ("tool", "plan", "react") else "sft"
+    stage_key = (args.stage if args.stage in ("tool", "plan", "react", "planact")
+                 else "sft")
     system_prompt = cfg.get(stage_key, {}).get("system_prompt")
 
     for q in questions:

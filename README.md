@@ -24,11 +24,12 @@ knowledge-pipeline/
 │   ├── preference_tuning.md  # DPO/ORPO/KTO 가이드 — 쓰기 전 필독
 │   ├── tool_calling.md       # 툴 호출(function calling) 학습 가이드
 │   ├── planning.md           # 계획수립(planning) 학습 가이드
-│   └── react.md              # 추론형(ReAct) 학습 가이드
+│   ├── react.md              # 추론형(ReAct) 학습 가이드
+│   └── planact.md            # 계획-실행(plan-and-execute) 학습 가이드
 ├── requirements.txt
 ├── run_pipeline.sh           # 전체 파이프라인 원클릭 실행
 ├── data/
-│   ├── raw/                  # ← 원문(.txt/.md), qa_/tools_/plans_/react_*.jsonl
+│   ├── raw/                  # ← 원문(.txt/.md), qa_/tools_/plans_/react_/planact_*.jsonl
 │   └── processed/            # 가공된 학습 데이터 (자동 생성)
 ├── scripts/
 │   ├── common.py             # config 로더, 메타정보 유틸
@@ -43,6 +44,8 @@ knowledge-pipeline/
 │   ├── train_plan.py         # (선택) 계획수립(planning) 전용 학습
 │   ├── generate_react.py     # (선택) LLM으로 ReAct 트레이스 자동 생성
 │   ├── train_react.py        # (선택) 추론형(ReAct) 전용 학습
+│   ├── generate_planact.py   # (선택) LLM으로 계획-실행 궤적 자동 생성
+│   ├── train_planact.py      # (선택) 계획-실행(plan-and-execute) 전용 학습
 │   ├── export_model.py       # [4] LoRA 병합 (16bit / GGUF)
 │   ├── test_model.py         # [5] 학습 결과 확인
 │   ├── generate_preference.py# (선택) 선호 학습 데이터 생성
@@ -206,6 +209,34 @@ bash run_pipeline.sh --with-react
 > 데이터 형식·관찰 마스킹 원리·tool/plan 단계와의 차이·주의사항은
 > **[docs/react.md](docs/react.md)** 를 참고하세요.
 
+### (선택) 계획-실행 학습 — plan-and-execute
+
+목표를 받아 **계획을 세우고 → 각 단계를 실제 tool_call로 실행하며 → 관찰을 종합해
+최종 답변**까지 내는 에이전트형 궤적을 학습하는 **별도 전용 단계**입니다(툴 호출 형식의
+확장 — 첫 assistant 턴에 계획이 실림). `data/raw/planact_*.jsonl`:
+
+```json
+{"tools": [{"type": "function", "function": {"name": "get_faction_info", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}}], "goal": "두 세력 관계 정리", "plan": ["A 조회", "B 조회", "비교"], "steps": [{"tool": "get_faction_info", "arguments": {"name": "셀레스티아 왕국"}, "observation": "{...}"}], "final_answer": "..."}
+```
+
+```bash
+# (선택) LLM으로 계획-실행 궤적 자동 생성
+export QA_GEN_BASE_URL=http://localhost:11434/v1
+export QA_GEN_MODEL=qwen2.5:14b
+python scripts/generate_planact.py --per-chunk 1
+
+python scripts/prepare_data.py          # planact_*.jsonl → planact_dataset.jsonl
+python scripts/train_planact.py         # 지식 SFT 위에 계획+실행 능력 추가
+python scripts/test_model.py --stage planact
+python scripts/export_model.py --stage planact
+
+# 전체 파이프라인에 붙이려면:
+bash run_pipeline.sh --with-planact
+```
+
+> tool 단계와 데이터 형식·학습 로직을 공유합니다. 계획/실행 정합성·관찰 마스킹·다른
+> 단계와의 차이는 **[docs/planact.md](docs/planact.md)** 를 참고하세요.
+
 ### (선택) 선호 학습 — DPO / ORPO / KTO
 
 SFT 이후 **환각 억제**나 형식 교정이 필요할 때 추가하는 단계입니다.
@@ -238,7 +269,8 @@ python scripts/export_model.py --stage dpo
 | `tool.init_from` | 툴 호출 학습 시작 지점 (`sft`(권장)/`cpt`/`base`/경로). [docs/tool_calling.md](docs/tool_calling.md) |
 | `plan.init_from` | 계획수립 학습 시작 지점 (`sft`(권장)/`cpt`/`base`/경로). [docs/planning.md](docs/planning.md) |
 | `react.init_from` | 추론형(ReAct) 학습 시작 지점 (`sft`(권장)/`tool`/`base`/경로). [docs/react.md](docs/react.md) |
-| `export.source_stage` | 병합할 단계 (`sft`/`tool`/`plan`/`react`/`dpo`/`orpo`/`kto`). 전용 단계를 썼다면 반드시 변경 |
+| `planact.init_from` | 계획-실행 학습 시작 지점 (`sft`(권장)/`tool`/`base`/경로). [docs/planact.md](docs/planact.md) |
+| `export.source_stage` | 병합할 단계 (`sft`/`tool`/`plan`/`react`/`planact`/`dpo`/`orpo`/`kto`). 전용 단계를 썼다면 반드시 변경 |
 | `export.save_gguf` | Ollama/llama.cpp용 GGUF 저장 여부 |
 | `preference.*` | 선호 학습 설정. [docs/preference_tuning.md](docs/preference_tuning.md) 참고 |
 

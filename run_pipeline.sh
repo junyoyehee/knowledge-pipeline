@@ -2,11 +2,12 @@
 # =========================================================
 # 지식축적형 학습 파이프라인 전체 실행
 #   1) 데이터 준비 → 2) CPT → 3) SFT → (선택) 툴/계획 → 4) 병합 → 5) 테스트
-# 사용법: bash run_pipeline.sh [--skip-export] [--with-tool] [--with-plan] [--with-react]
-#   --with-tool  : SFT 뒤에 툴 호출 전용 학습을 추가
-#   --with-plan  : SFT 뒤에 계획수립 전용 학습을 추가
-#   --with-react : SFT 뒤에 추론형(ReAct) 전용 학습을 추가
-#   여러 플래그를 함께 주면 모두 학습하며, 병합/테스트 기준은 react > plan > tool 순.
+# 사용법: bash run_pipeline.sh [--skip-export] [--with-tool] [--with-plan] [--with-react] [--with-planact]
+#   --with-tool    : SFT 뒤에 툴 호출 전용 학습을 추가
+#   --with-plan    : SFT 뒤에 계획수립 전용 학습을 추가
+#   --with-react   : SFT 뒤에 추론형(ReAct) 전용 학습을 추가
+#   --with-planact : SFT 뒤에 계획-실행(plan-and-execute) 전용 학습을 추가
+#   여러 플래그를 함께 주면 모두 학습하며, 병합/테스트 기준은 planact > react > plan > tool 순.
 #   (다른 단계를 병합/테스트하려면 export_model.py/test_model.py에 --stage로 직접 지정)
 # =========================================================
 set -euo pipefail
@@ -16,11 +17,13 @@ SKIP_EXPORT=false
 WITH_TOOL=false
 WITH_PLAN=false
 WITH_REACT=false
+WITH_PLANACT=false
 for arg in "$@"; do
   [ "$arg" = "--skip-export" ] && SKIP_EXPORT=true
   [ "$arg" = "--with-tool" ] && WITH_TOOL=true
   [ "$arg" = "--with-plan" ] && WITH_PLAN=true
   [ "$arg" = "--with-react" ] && WITH_REACT=true
+  [ "$arg" = "--with-planact" ] && WITH_PLANACT=true
 done
 
 echo "===== [1/6] 데이터 준비 ====="
@@ -34,8 +37,9 @@ python scripts/train_sft.py
 
 # 병합/테스트에 쓸 단계 (지정된 전용 단계가 우선, 없으면 SFT)
 STAGE_ARGS=()
-if [ "$WITH_TOOL" = false ] && [ "$WITH_PLAN" = false ] && [ "$WITH_REACT" = false ]; then
-  echo "===== [4/6] 전용 단계 건너뜀 (--with-tool / --with-plan / --with-react 로 활성화) ====="
+if [ "$WITH_TOOL" = false ] && [ "$WITH_PLAN" = false ] \
+   && [ "$WITH_REACT" = false ] && [ "$WITH_PLANACT" = false ]; then
+  echo "===== [4/6] 전용 단계 건너뜀 (--with-tool/--with-plan/--with-react/--with-planact 로 활성화) ====="
 else
   echo "===== [4/6] 전용 단계 학습 ====="
   if [ "$WITH_TOOL" = true ]; then
@@ -52,6 +56,11 @@ else
     echo "----- 추론형(ReAct) 학습 -----"
     python scripts/train_react.py
     STAGE_ARGS=(--stage react)  # react를 병합/테스트 기준으로 (plan/tool보다 우선)
+  fi
+  if [ "$WITH_PLANACT" = true ]; then
+    echo "----- 계획-실행(plan-and-execute) 학습 -----"
+    python scripts/train_planact.py
+    STAGE_ARGS=(--stage planact)  # planact를 병합/테스트 기준으로 (최우선)
   fi
 fi
 

@@ -18,6 +18,9 @@
         {"tools": [<함수 스키마>], "messages": [... tool_calls / role:tool ...]}
     data/raw/react_*.jsonl        : (선택) 추론형(ReAct) 트레이스. docs/react.md
         {"question": "...", "steps": [{"thought","action","observation"}], "final_answer": "..."}
+    data/raw/planact_*.jsonl      : (선택) 계획-실행(plan-and-execute) 궤적. docs/planact.md
+        {"tools": [...], "goal": "...", "plan": [...],
+         "steps": [{"tool","arguments","observation"}], "final_answer": "..."}
 
 출력 (각 줄에 meta 필드가 함께 붙습니다 — 의미와 활용법은 docs/meta_info.md):
     data/processed/cpt_dataset.jsonl   : {"text": "...", "meta": {...}}
@@ -25,6 +28,7 @@
     data/processed/tool_dataset.jsonl  : {"messages": [...], "tools": "<JSON>", "meta": {...}}
     data/processed/plan_dataset.jsonl  : {"messages": [...], "meta": {"n_steps": N, ...}}
     data/processed/react_dataset.jsonl : {"messages": [...], "meta": {"n_steps": N, ...}}
+    data/processed/planact_dataset.jsonl : {"messages": [...], "tools": "<JSON>", "meta": {...}}
 
 계획수립(planning) 입력 형식 (data/raw/plans_*.jsonl):
     {"goal": "목표", "steps": ["1단계", "2단계", ...]}          (권장)
@@ -258,6 +262,36 @@ SAMPLE_REACT = [
           "action": "finish[]",
           "observation": "(종료)"}],
      "final_answer": "네. 1차 낙토 현상은 제국력 847년, 흑요 상회 결성은 903년이므로 낙토 현상이 56년 먼저 일어났습니다."},
+]
+
+
+# ---------------------------------------------------------------
+# 샘플 계획-실행(plan-and-execute) 데이터 (planact_*.jsonl이 없을 때 생성됨)
+# 목표 → 계획 → 각 단계를 tool_call로 실행 → 관찰 종합 → 최종 답변.
+# SAMPLE_TOOLS 카탈로그를 그대로 사용한다. 형식은 docs/planact.md.
+# ---------------------------------------------------------------
+SAMPLE_PLANACT = [
+    {"tools": SAMPLE_TOOLS,
+     "goal": "셀레스티아 왕국과 흑요 상회의 관계를 코어스톤 관점에서 정리해줘",
+     "plan": [
+         "셀레스티아 왕국의 세력 정보를 조회한다",
+         "흑요 상회의 세력 정보를 조회한다",
+         "두 세력의 코어스톤 관련 이해관계를 비교해 정리한다"],
+     "steps": [
+         {"tool": "get_faction_info", "arguments": {"name": "셀레스티아 왕국"},
+          "observation": '{"name": "셀레스티아 왕국", "leader": "아리안 셀레스티아 7세", "org": "성탑 기사단", "note": "코어스톤 관리 기관 운영"}'},
+         {"tool": "get_faction_info", "arguments": {"name": "흑요 상회"},
+          "observation": '{"name": "흑요 상회", "leader": "베라 무어게이트", "note": "코어스톤 파편 밀거래, 왕국과 긴장 관계"}'}],
+     "final_answer": "셀레스티아 왕국은 성탑 기사단을 통해 코어스톤을 공식 관리하는 반면, 흑요 상회는 코어스톤 파편을 밀거래합니다. 이 밀거래 때문에 두 세력은 긴장 관계에 있습니다."},
+    {"tools": SAMPLE_TOOLS,
+     "goal": "5등급 코어스톤 현황을 확인하고 가장 시급히 점검할 위치를 제안해줘",
+     "plan": [
+         "5등급 코어스톤의 개수와 위치를 조회한다",
+         "위치 목록을 바탕으로 우선 점검 대상을 제안한다"],
+     "steps": [
+         {"tool": "lookup_corestone", "arguments": {"grade": 5},
+          "observation": '{"grade": 5, "name": "심장", "count": 3, "locations": ["루멘하임 대성탑", "남부 해구", "북부 빙하 아래"]}'}],
+     "final_answer": "5등급 '심장'은 루멘하임 대성탑·남부 해구·북부 빙하 아래 세 곳에 있습니다. 수도 방어와 직결된 루멘하임 대성탑을 가장 먼저 점검할 것을 제안합니다."},
 ]
 
 
@@ -760,6 +794,107 @@ def build_react_meta(raw: dict, messages: list, n_steps: int,
     return meta
 
 
+# ---------------------------------------------------------------
+# 계획-실행(plan-and-execute) 데이터 정규화
+#   - goal + plan(단계 목록) + steps(각 단계의 tool 실행) + final_answer 를 받아
+#     하나의 멀티턴 궤적으로 조립한다:
+#       user(goal) → assistant(계획 + 1단계 tool_call) → tool(관찰)
+#                  → assistant(다음 tool_call) → tool(관찰) → ... → assistant(최종 답변)
+#   - 조립 후 tool 데이터 검증기(normalize_tool_sample)를 그대로 통과시킨다.
+#     저장 형식·arguments 문자열화·tool 결과 마스킹이 tool 단계와 완전히 동일해진다.
+# ---------------------------------------------------------------
+PLANACT_MIN_PLAN = 2  # 계획이 최소 2단계는 되어야 '계획'이라 부를 수 있다
+
+
+def normalize_planact_sample(item: dict) -> dict | None:
+    """계획-실행 샘플 → {"messages": [...], "tools": [...], "n_steps": N, "n_plan": M} 또는 None."""
+    if not isinstance(item, dict):
+        return None
+
+    # 1) 이미 {messages, tools} 궤적이면 tool 검증기로 그대로 처리
+    if isinstance(item.get("messages"), list) and item.get("tools") is not None:
+        base = normalize_tool_sample(item)
+        if not base:
+            return None
+        n_steps = sum(1 for m in base["messages"]
+                      if m["role"] == "assistant" and m.get("tool_calls"))
+        return {**base, "n_steps": n_steps, "n_plan": 0}
+
+    # 2) goal + plan + steps 구조
+    tools = _normalize_tools(item.get("tools"))
+    if not tools:
+        return None
+    tool_names = {t["function"]["name"] for t in tools}
+
+    goal = item.get("goal") or item.get("instruction") or item.get("question")
+    final = item.get("final_answer") or item.get("answer") or item.get("final")
+    plan_raw = item.get("plan") or item.get("plan_steps")
+    exec_raw = item.get("steps") or item.get("actions") or item.get("executions")
+    if not (isinstance(goal, str) and goal.strip()):
+        return None
+    if not (isinstance(final, str) and final.strip()):
+        return None
+    if not isinstance(plan_raw, list) or not isinstance(exec_raw, list) or not exec_raw:
+        return None
+
+    plan = [t for t in (_step_to_text(s) for s in plan_raw) if t]
+    if len(plan) < PLANACT_MIN_PLAN:
+        return None
+
+    user_content = goal.strip()
+    ctx = item.get("context") or item.get("input")
+    if isinstance(ctx, str) and ctx.strip():
+        user_content = f"{user_content}\n\n{ctx.strip()}"
+
+    messages = [{"role": "user", "content": user_content}]
+    plan_text = render_plan(plan, item.get("intro"))
+    for idx, st in enumerate(exec_raw):
+        if not isinstance(st, dict):
+            return None
+        tool = st.get("tool") or st.get("name")
+        if tool not in tool_names:      # 카탈로그에 없는 함수는 거부
+            return None
+        arguments = st.get("arguments")
+        if arguments is None:
+            arguments = st.get("input", {})
+        obs = st.get("observation")
+        if isinstance(obs, (dict, list)):
+            obs = json.dumps(obs, ensure_ascii=False)
+        if not (isinstance(obs, str) and obs.strip()):
+            return None
+        # 첫 assistant 턴에만 계획을 담고, 이후 턴은 tool_call만
+        content = plan_text if idx == 0 else ""
+        messages.append({"role": "assistant", "content": content,
+                         "tool_calls": [{"id": f"call_{idx + 1}", "type": "function",
+                                         "function": {"name": tool, "arguments": arguments}}]})
+        messages.append({"role": "tool", "tool_call_id": f"call_{idx + 1}",
+                         "content": obs.strip()})
+    messages.append({"role": "assistant", "content": final.strip()})
+
+    # tool 데이터 검증기로 최종 검증·정규화 (arguments 문자열화 등)
+    base = normalize_tool_sample({"tools": tools, "messages": messages})
+    if not base:
+        return None
+    return {**base, "n_steps": len(exec_raw), "n_plan": len(plan)}
+
+
+def build_planact_meta(raw: dict, tools: list, messages: list,
+                       n_steps: int, n_plan: int, path: str, lineno: int) -> dict:
+    """계획-실행 샘플의 메타정보 생성. 입력에 meta가 있으면 그쪽을 우선한다."""
+    incoming = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    meta = {
+        "id": f"{slugify(path)}-{lineno:04d}",
+        "source": os.path.basename(path),
+        "origin": "human",          # 자동 생성분은 generate_planact.py가 llm:*로 표기
+        "n_tools": len(tools),
+        "n_plan": n_plan,
+        "n_steps": n_steps,
+    }
+    meta.update({k: v for k, v in incoming.items() if v is not None})
+    meta["hash"] = tool_sample_hash(tools, messages)
+    return meta
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
@@ -779,9 +914,11 @@ def main():
     tool_files = sorted(glob.glob(os.path.join(raw_dir, "tools_*.jsonl")))
     plan_files = sorted(glob.glob(os.path.join(raw_dir, "plans_*.jsonl")))
     react_files = sorted(glob.glob(os.path.join(raw_dir, "react_*.jsonl")))
+    planact_files = sorted(glob.glob(os.path.join(raw_dir, "planact_*.jsonl")))
 
-    # 아무것도 없으면 샘플 생성 (원문 + QA + 툴 호출 + 계획수립 + ReAct)
-    if not (doc_files or qa_files or tool_files or plan_files or react_files):
+    # 아무것도 없으면 샘플 생성 (원문 + QA + 툴 호출 + 계획수립 + ReAct + 계획-실행)
+    if not (doc_files or qa_files or tool_files or plan_files or react_files
+            or planact_files):
         print("[i] data/raw/에 문서가 없어 샘플 데이터를 생성합니다.")
         sample_doc = os.path.join(raw_dir, "sample_worldbook.md")
         with open(sample_doc, "w", encoding="utf-8") as f:
@@ -802,8 +939,13 @@ def main():
         with open(sample_react, "w", encoding="utf-8") as f:
             for item in SAMPLE_REACT:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        sample_planact = os.path.join(raw_dir, "planact_sample.jsonl")
+        with open(sample_planact, "w", encoding="utf-8") as f:
+            for item in SAMPLE_PLANACT:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
         doc_files, qa_files = [sample_doc], [sample_qa]
-        tool_files, plan_files, react_files = [sample_tools], [sample_plans], [sample_react]
+        tool_files, plan_files = [sample_tools], [sample_plans]
+        react_files, planact_files = [sample_react], [sample_planact]
 
     # ---------- CPT 데이터셋 생성 ----------
     # meta.id는 SFT 쪽에서 meta.chunk_id로 참조되므로 안정적으로 유지되어야 한다.
@@ -984,6 +1126,50 @@ def main():
     elif react_out:
         print("[i] ReAct 파일(react_*.jsonl)이 없어 react 단계 데이터는 만들지 "
               "않았습니다. generate_react.py로 생성하거나 react 단계를 건너뛰세요.")
+
+    # ---------- 계획-실행(plan-and-execute) 데이터셋 생성 (선택) ----------
+    planact_out = cfg["data"].get("planact_dataset")
+    if planact_files and planact_out:
+        os.makedirs(os.path.dirname(planact_out), exist_ok=True)
+        n_pa, n_pa_skipped = 0, 0
+        with open(planact_out, "w", encoding="utf-8") as out:
+            for path in planact_files:
+                with open(path, "r", encoding="utf-8") as f:
+                    for lineno, line in enumerate(f, 1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            raw = json.loads(line)
+                        except json.JSONDecodeError:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "JSON 파싱 실패 — 건너뜀")
+                            n_pa_skipped += 1
+                            continue
+                        item = normalize_planact_sample(raw)
+                        if not item:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "인식할 수 없는 계획-실행 형식 — 건너뜀")
+                            n_pa_skipped += 1
+                            continue
+                        record = {
+                            "messages": item["messages"],
+                            # tools는 함수마다 구조가 달라 JSON 문자열로 저장 (tool 단계와 동일)
+                            "tools": json.dumps(item["tools"], ensure_ascii=False),
+                            "meta": build_planact_meta(raw, item["tools"],
+                                                       item["messages"], item["n_steps"],
+                                                       item["n_plan"], path, lineno),
+                        }
+                        out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        n_pa += 1
+        if n_pa:
+            print(f"[OK] 계획-실행 데이터셋: {n_pa}개 궤적 → {planact_out}"
+                  + (f" ({n_pa_skipped}개 건너뜀)" if n_pa_skipped else ""))
+        else:
+            print("[!] 유효한 계획-실행 샘플이 없습니다. docs/planact.md의 형식을 확인하세요.")
+    elif planact_out:
+        print("[i] 계획-실행 파일(planact_*.jsonl)이 없어 planact 단계 데이터는 만들지 "
+              "않았습니다. generate_planact.py로 생성하거나 planact 단계를 건너뛰세요.")
 
 
 if __name__ == "__main__":
