@@ -9,7 +9,7 @@ import signal
 import subprocess
 import threading
 
-from . import config, config_builder, secrets, storage, store
+from . import config, config_builder, remote, secrets, storage, store
 
 # 실행 중인 잡의 Popen 핸들 (취소용)
 _procs: dict[str, subprocess.Popen] = {}
@@ -89,11 +89,14 @@ def run_job(job: dict) -> None:
         if rejected:
             store.update_job(jid, progress={"rejected_overrides": rejected})
 
-        # 2) 커맨드 구성 (기존 스크립트를 패키지 모듈로 실행: python -m scripts.<group>.<name>)
+        # 2) 로컬/원격 실행 결정 (GPU 잡 + 원격 설정 시 SSH 원격 실행)
         module, *extra = _script_for(job)
-        cmd = [config.PYTHON, "-m", module, *extra, "--config", str(cfg_path)]
+        # 구조화 메트릭 리포트 경로 (stdout 파싱 대신 이 파일에서 결과 수집)
+        report_path = jdir / "report.json"
+        extra = [*extra, "--report-json", str(report_path)]
+        remote_mode = remote.enabled_for(job["type"])
 
-        # 3) 환경변수 (generate 잡은 LLM 시크릿 주입)
+        # 3) 환경변수 (generate 잡은 LLM 시크릿 주입; 원격 GPU 잡은 불필요)
         env = os.environ.copy()
         if job["type"] == "generate":
             sec = secrets.load_secrets(pid)
@@ -102,7 +105,16 @@ def run_job(job: dict) -> None:
             env["QA_GEN_MODEL"] = llm.get("model", sec.get("QA_GEN_MODEL", ""))
             env["QA_GEN_API_KEY"] = llm.get("api_key", sec.get("QA_GEN_API_KEY", "dummy"))
 
-    except Exception as e:  # noqa: BLE001  (구성 단계 실패)
+        if remote_mode:
+            # 입력 데이터·config·기존 어댑터를 원격으로 푸시 후 SSH 실행 커맨드 구성
+            remote.push_project(pid)
+            cmd = remote.build_cmd(module, extra, cfg_path)
+            cwd = None
+        else:
+            cmd = [config.PYTHON, "-m", module, *extra, "--config", str(cfg_path)]
+            cwd = str(config.REPO_ROOT)
+
+    except Exception as e:  # noqa: BLE001  (구성/원격 준비 단계 실패)
         store.update_job(jid, status="failed", error=f"구성 실패: {e}",
                          finished_at=store.now())
         _notify(job)
@@ -113,8 +125,12 @@ def run_job(job: dict) -> None:
     progress: dict = {}
     try:
         with open(log_path, "w", encoding="utf-8") as logf:
+            if remote_mode:
+                logf.write(f"[remote] {config.REMOTE_HOST} 에서 실행: "
+                           f"{' '.join(module.split())}\n")
+                logf.flush()
             proc = subprocess.Popen(
-                cmd, cwd=str(config.REPO_ROOT), env=env,
+                cmd, cwd=cwd, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 bufsize=1)
             with _procs_lock:
@@ -143,8 +159,19 @@ def run_job(job: dict) -> None:
         _notify(cur)
         return
     if rc == 0:
+        if remote_mode:                       # 원격 산출물·리포트를 로컬로 회수
+            try:
+                remote.pull_outputs(pid)
+                remote.pull_file(report_path)
+            except Exception as e:  # noqa: BLE001
+                store.update_job(jid, status="failed",
+                                 error=f"원격 산출물 회수 실패: {e}",
+                                 finished_at=store.now())
+                _notify(store.get_job(jid))
+                return
+        report = _read_report(report_path)
         store.update_job(jid, status="succeeded",
-                         result=_collect_result(job, last_loss),
+                         result=_collect_result(job, last_loss, report),
                          finished_at=store.now())
     else:
         tail = _log_tail(log_path)
@@ -154,16 +181,33 @@ def run_job(job: dict) -> None:
     _notify(store.get_job(jid))
 
 
-def _collect_result(job: dict, last_loss: float | None) -> dict:
+def _read_report(path) -> dict | None:
+    """스크립트가 남긴 구조화 리포트(JSON)를 읽는다. 없거나 손상 시 None."""
+    try:
+        import json
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _collect_result(job: dict, last_loss: float | None,
+                    report: dict | None = None) -> dict:
+    """결과 조립 — 스크립트 리포트(정확)를 우선하고, 없으면 stdout/경로로 폴백."""
     jtype, pid = job["type"], job["project_id"]
-    result: dict = {}
+
+    if report:  # --report-json 으로 받은 구조화 메트릭을 그대로 신뢰
+        result = {k: v for k, v in report.items() if k not in ("status", "task")}
+        result.setdefault("source", "report-json")
+        return result
+
+    # 폴백: 리포트가 없을 때 stdout loss·경로 규약으로 추정
+    result: dict = {"source": "stdout-fallback"}
     if last_loss is not None:
         result["metrics"] = {"train_loss": last_loss}
     if jtype == "train":
-        result["adapter"] = {"stage": job["stage"],
-                             "path": str(storage.outputs_dir(pid) / job["stage"] / "final")}
+        result["adapter_dir"] = str(storage.outputs_dir(pid) / job["stage"] / "final")
     elif jtype == "export":
-        result["model"] = {"merged_dir": str(storage.outputs_dir(pid) / "final_model")}
+        result["merged_dir"] = str(storage.outputs_dir(pid) / "final_model")
     elif jtype == "prepare":
         result["datasets"] = _dataset_summary(pid)
     return result

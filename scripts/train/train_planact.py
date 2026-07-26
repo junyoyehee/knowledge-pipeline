@@ -25,11 +25,13 @@ import os
 # train_tool이 pref_common→unsloth를 먼저 import하므로 여기서 가져오면 순서가 지켜진다.
 from scripts.train.train_tool import train_tool_style
 from scripts.lib.pref_common import load_config
+from scripts.lib.common import add_report_arg
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -40,7 +42,8 @@ def main():
             "planact_*.jsonl을 넣고 prepare_data.py를 돌리거나, "
             "generate_planact.py로 먼저 생성하세요.")
 
-    train_tool_style(cfg, cfg["planact"], planact_path, "planact")
+    train_tool_style(cfg, cfg["planact"], planact_path, "planact",
+                     report_path=args.report_json)
 
 
 if __name__ == "__main__":

@@ -16,10 +16,12 @@ SFT와 선호 학습을 **한 단계로 합칩니다.** chosen에 대한 일반�
 출력: outputs/orpo/ (LoRA 어댑터)
 """
 import argparse
+import os
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함
 from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
+from scripts.lib.common import add_report_arg, write_report
 
 from unsloth import is_bfloat16_supported
 
@@ -29,6 +31,7 @@ from trl import ORPOConfig, ORPOTrainer
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -76,6 +79,14 @@ def main():
           "\"orpo\"로 바꿔야 이 어댑터가 병합됩니다.")
 
     save_adapter(model, tokenizer, stage_cfg["output_dir"], "orpo")
+
+    write_report(args.report_json, {
+        "task": "train", "stage": "orpo", "status": "ok",
+        "n_samples": len(dataset),
+        "adapter_dir": os.path.join(stage_cfg["output_dir"], "final"),
+        "metrics": {"train_loss": float(stats.training_loss),
+                    **{k: v for k, v in (getattr(stats, "metrics", None) or {}).items()}},
+    })
 
 
 if __name__ == "__main__":

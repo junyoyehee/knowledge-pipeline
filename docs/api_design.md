@@ -406,8 +406,10 @@ Job 객체(공통):
 - 잡별 로그 파일 + SSE 스트림.
 - 메트릭: 잡 처리시간, GPU 큐 대기시간, 성공/실패율, 단계별 train_loss.
 - 헬스체크: `GET /v1/healthz`(API), `GET /v1/readyz`(GPU/워커 가용성).
-- (권장) 스크립트에 `--report-json <path>` 옵션을 추가해 메트릭을 stdout 파싱 대신
-  구조화 파일로 받도록 개선(별도 작업 항목).
+- ✅ **구조화 메트릭 (`--report-json`)**: 모든 스크립트가 완료 후 결과를 JSON으로
+  기록하며(`scripts/lib/common.py`의 `add_report_arg`/`write_report`), API 러너가
+  잡별 `report.json`을 읽어 `result`를 구성한다(리포트 우선, 없으면 stdout 폴백).
+  원격 실행 시 리포트도 함께 회수한다.
 
 ---
 

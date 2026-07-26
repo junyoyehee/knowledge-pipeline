@@ -14,10 +14,12 @@
 출력: outputs/dpo/ (LoRA 어댑터)
 """
 import argparse
+import os
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함 (pref_common이 unsloth를 import)
 from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
+from scripts.lib.common import add_report_arg, write_report
 
 # 구버전 unsloth는 DPO 최적화를 위해 명시적 패치가 필요했음. 신버전은 불필요.
 try:
@@ -34,6 +36,7 @@ from trl import DPOConfig, DPOTrainer
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -85,6 +88,14 @@ def main():
           "rejected가 충분히 '그럴듯한지' 확인하세요.")
 
     save_adapter(model, tokenizer, stage_cfg["output_dir"], "dpo")
+
+    write_report(args.report_json, {
+        "task": "train", "stage": "dpo", "status": "ok",
+        "n_samples": len(dataset),
+        "adapter_dir": os.path.join(stage_cfg["output_dir"], "final"),
+        "metrics": {"train_loss": float(stats.training_loss),
+                    **{k: v for k, v in (getattr(stats, "metrics", None) or {}).items()}},
+    })
 
 
 if __name__ == "__main__":

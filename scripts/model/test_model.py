@@ -21,7 +21,7 @@ import os
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template
 
-from scripts.lib.common import load_config, stage_adapter
+from scripts.lib.common import load_config, stage_adapter, add_report_arg, write_report
 
 
 def load_test_tools(args, cfg, dataset_path):
@@ -76,6 +76,7 @@ def main():
                         help="tool 스테이지 테스트 시 쓸 함수 스키마 JSON 파일 "
                              "(생략 시 tool_dataset에서 로드)")
     parser.add_argument("--max-new-tokens", type=int, default=512)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -118,6 +119,7 @@ def main():
                  else "sft")
     system_prompt = cfg.get(stage_key, {}).get("system_prompt")
 
+    results = []
     for q in questions:
         messages = []
         if system_prompt:
@@ -135,10 +137,14 @@ def main():
         )
         answer = tokenizer.decode(outputs[0][inputs.shape[1]:],
                                   skip_special_tokens=True)
+        results.append({"question": q, "answer": answer.strip()})
         print("=" * 70)
         print(f"Q: {q}")
         print(f"A: {answer.strip()}")
     print("=" * 70)
+
+    write_report(args.report_json, {"task": "infer", "stage": args.stage,
+                                    "status": "ok", "results": results})
 
 
 if __name__ == "__main__":

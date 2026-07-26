@@ -63,17 +63,21 @@ unsloth(+CUDA)는 **GPU가 있는 호스트에서만** 실행됩니다. 따라�
 - 장점: MVP 재사용도 높고 확장성 우수(다중 GPU 노드로 워커 수평 확장). 단점: 큐·공유
   스토리지 인프라 필요.
 
-### ② SSH 원격 실행 (가장 빠른 시작 · PoC)
+### ② SSH 원격 실행 (가장 빠른 시작 · PoC) — ✅ 구현됨
 
 ```
-API 호스트: 잡별 config + 데이터셋 → rsync/scp 전송 → SSH로 `python -m scripts.train.*`
-          → stdout 스트리밍 회수 → 산출 어댑터 rsync 회수 → 취소 시 원격 PID kill
+API 호스트: 잡별 config + 데이터셋 → rsync 푸시 → SSH로 `python -m scripts.<group>.<name>`
+          → stdout 스트리밍 → 산출 outputs/ rsync 회수
 ```
 
-- **변경 지점:** `api/runner.py`의 실행부만 "로컬 subprocess → SSH 실행"으로 교체.
-  config 생성·로그·메트릭 파싱 로직은 그대로.
-- 장점: 인프라 최소, 빠른 도입. 단점: 파일 동기화·장애·동시성 관리가 취약, 확장 어려움.
+- **구현:** `api/remote.py`(push/pull/build_cmd) + `api/runner.py`가 GPU 잡일 때 원격 분기.
+  config 생성·로그·메트릭 파싱 로직은 로컬과 동일하게 재사용.
+- **활성화:** `KP_REMOTE_ENABLED=1`, `KP_REMOTE_HOST`, `KP_REMOTE_DIR`(+`KP_REMOTE_SSH_OPTS`).
+  자세한 사용법은 [api/README.md](../api/README.md)의 "원격 unsloth 실행".
+- 장점: 인프라 최소, 빠른 도입. 단점: 파일 동기화(rsync)·장애·동시성 관리가 취약, 확장 어려움.
   단일 원격 GPU 1대에 적합.
+- **한계(PoC):** 취소는 로컬 ssh 프로세스를 종료하며 원격 프로세스가 잠시 잔존할 수 있음.
+  스토리지는 rsync 전송(공유 마운트 아님) — 대용량/다중 노드는 ①(공유 스토리지)로 승격.
 
 ### ③ 관리형 스케줄러 (이미 클러스터가 있을 때)
 

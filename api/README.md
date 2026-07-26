@@ -36,6 +36,30 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 | `KP_CPU_CONCURRENCY` | `2` | 동시 CPU 잡 수 |
 | `KP_SECRET_KEY` | (자동생성) | 시크릿 암호화 Fernet 키 |
 | `KP_PYTHON` | 현재 인터프리터 | 스크립트 실행 파이썬 |
+| `KP_REMOTE_ENABLED` | `false` | GPU 잡(train/export/infer)을 원격 SSH로 실행 |
+| `KP_REMOTE_HOST` | — | 원격 GPU 호스트 (예: `user@gpu-host`) |
+| `KP_REMOTE_DIR` | — | 원격 리포 체크아웃 경로 |
+| `KP_REMOTE_PYTHON` | `python3` | 원격 파이썬 |
+| `KP_REMOTE_SSH_OPTS` | — | 추가 ssh 옵션 (예: `-p 2222 -i ~/key`) |
+
+### 원격 unsloth(GPU) 실행 (SSH 러너, PoC)
+
+GPU가 없는 호스트에서 API를 돌리고 **학습·병합·추론만 원격 GPU 호스트**에서
+실행할 수 있습니다(CPU 잡 prepare/generate는 항상 로컬). 설계·한계는
+[../docs/remote_unsloth.md](../docs/remote_unsloth.md).
+
+```bash
+export KP_REMOTE_ENABLED=1
+export KP_REMOTE_HOST=user@gpu-host
+export KP_REMOTE_DIR=/opt/knowledge-pipeline    # 원격에 이 리포 체크아웃 + unsloth 설치
+# (선택) export KP_REMOTE_SSH_OPTS="-p 2222 -i ~/.ssh/key"
+uvicorn api.main:app --port 8000
+```
+
+동작: GPU 잡 실행 시 ① 프로젝트 스토리지를 원격에 `rsync` 푸시 → ② SSH로
+`python -m scripts.<group>.<name> --config <경로>` 실행(로그 스트리밍) → ③ 성공 시
+원격 `outputs/`를 로컬로 회수. 전제: 원격에 리포 체크아웃+unsloth, 로컬에 ssh/rsync,
+스토리지 절대경로를 원격에서도 동일하게 접근 가능(기본은 동일 경로 미러링).
 
 ## 빠른 예시
 
@@ -104,4 +128,6 @@ PYTHONPATH=. python3 -m api.tests.test_e2e
 
 - 상시 저지연 서빙(vLLM Deployment)은 미포함 — 현재 추론은 잡 기반 간이 테스트.
 - 스케일아웃(Celery/RQ, 다중 GPU, S3), 멀티테넌시/쿼터, 웹 콘솔은 이후 단계.
-- 메트릭은 stdout 파싱 — 정밀 진행률은 스크립트에 `--report-json` 추가 권장.
+- 최종 메트릭은 스크립트가 남기는 `--report-json`(잡별 `report.json`)에서 수집합니다
+  (stdout 파싱은 폴백). **실시간 step 단위 진행률**은 아직 stdout 파싱이며, TrainerCallback
+  기반 정밀 진행률은 후속 작업입니다.

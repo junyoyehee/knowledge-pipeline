@@ -17,7 +17,8 @@ import argparse
 import json
 import os
 
-from scripts.lib.common import load_config, messages_hash
+from scripts.lib.common import (load_config, messages_hash, add_report_arg,
+                                write_report)
 from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 
 PROMPT_TEMPLATE = """다음 문서 내용을 바탕으로, 문서에 담긴 지식을 확인하는 질문-답변 쌍을 {n}개 만들어주세요.
@@ -57,6 +58,7 @@ def main():
                         help="청크당 생성할 QA 쌍 수")
     parser.add_argument("--max-chunks", type=int, default=None,
                         help="처리할 최대 청크 수 (테스트용)")
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -108,6 +110,9 @@ def main():
             print(f"[{i}/{len(chunks)}] QA {len(pairs)}개 생성 (누적 {total})")
 
     print(f"[OK] 총 {total}개 QA 쌍 → {cfg['data']['sft_dataset']}")
+    write_report(args.report_json, {"task": "generate", "kind": "qa",
+                                    "status": "ok", "generated": total,
+                                    "origin": origin})
 
 
 if __name__ == "__main__":

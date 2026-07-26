@@ -26,7 +26,8 @@ import argparse
 import json
 import os
 
-from scripts.lib.common import PROJECT_ROOT, load_config, tool_sample_hash
+from scripts.lib.common import (PROJECT_ROOT, load_config, tool_sample_hash,
+                                add_report_arg, write_report)
 from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 # prepare_data의 정규화·검증 로직을 그대로 재사용 (unsloth 비의존)
 from scripts.data.prepare_data import SAMPLE_TOOLS, _normalize_tools, normalize_tool_sample
@@ -150,6 +151,7 @@ def main():
                         help="처리할 최대 청크 수 (테스트용)")
     parser.add_argument("--overwrite", action="store_true",
                         help="기존 tool_dataset.jsonl을 덮어쓰기 (기본은 append)")
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -211,6 +213,9 @@ def main():
     print("\n[!] 생성된 arguments와 tool_result는 반드시 사람이 표본 검수하세요. "
           "인자·결과가 스키마나 사실과 어긋나면 모델에 잘못된 호출을 가르치게 됩니다.\n"
           "    자세한 내용: docs/tool_calling.md")
+    write_report(args.report_json, {"task": "generate", "kind": "tool",
+                                    "status": "ok", "generated": total,
+                                    "origin": origin})
 
 
 if __name__ == "__main__":

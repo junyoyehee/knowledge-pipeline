@@ -20,12 +20,14 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 
 # 채팅 템플릿별 user/assistant 구분 토큰 (train_tool.py와 공용)
-from scripts.lib.common import load_config, TEMPLATE_PARTS
+from scripts.lib.common import (load_config, TEMPLATE_PARTS, add_report_arg,
+                                write_report)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -135,6 +137,14 @@ def main():
     model.save_pretrained(final_dir)
     tokenizer.save_pretrained(final_dir)
     print(f"[OK] SFT 어댑터 저장: {final_dir}")
+
+    write_report(args.report_json, {
+        "task": "train", "stage": "sft", "status": "ok",
+        "n_samples": len(dataset),
+        "adapter_dir": final_dir,
+        "metrics": {"train_loss": float(stats.training_loss),
+                    **{k: v for k, v in (getattr(stats, "metrics", None) or {}).items()}},
+    })
 
 
 if __name__ == "__main__":
