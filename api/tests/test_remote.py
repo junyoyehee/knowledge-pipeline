@@ -47,10 +47,11 @@ def test_runner_remote_branch(monkeypatch):
     storage.init_project_dirs(p["id"])
     job = store.create_job(p["id"], "export", {"overrides": {}}, stage="sft")
 
-    calls = {"push": 0, "pull": 0}
+    calls = {"push": 0, "pull": 0, "pull_file": 0}
     monkeypatch.setattr(remote, "enabled_for", lambda t: True)
     monkeypatch.setattr(remote, "push_project", lambda pid: calls.__setitem__("push", calls["push"] + 1))
     monkeypatch.setattr(remote, "pull_outputs", lambda pid: calls.__setitem__("pull", calls["pull"] + 1))
+    monkeypatch.setattr(remote, "pull_file", lambda p: calls.__setitem__("pull_file", calls["pull_file"] + 1))
     # build_cmd를 무해한 로컬 커맨드로 대체(원격 실행을 시뮬레이션)
     monkeypatch.setattr(remote, "build_cmd",
                         lambda module, extra, cfg: [sys.executable, "-c",
@@ -60,8 +61,9 @@ def test_runner_remote_branch(monkeypatch):
 
     done = store.get_job(job["id"])
     assert done["status"] == "succeeded", done
-    assert calls["push"] == 1 and calls["pull"] == 1, calls          # 푸시·회수 호출됨
-    assert done["result"]["metrics"]["train_loss"] == 0.42           # stdout loss 파싱
+    assert calls["push"] == 1 and calls["pull"] == 1, calls          # 푸시·산출물 회수
+    assert calls["pull_file"] == 1, calls                            # 리포트 회수 시도
+    assert done["result"]["metrics"]["train_loss"] == 0.42           # stdout loss 폴백
     log = (storage.job_dir(p["id"], job["id"]) / "job.log").read_text(encoding="utf-8")
     assert "[remote]" in log and "remote-sim" in log
     print("[ok] runner 원격 분기(push→build_cmd→실행→pull) 검증")

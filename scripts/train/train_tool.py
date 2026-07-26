@@ -31,7 +31,7 @@ from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
-from scripts.lib.common import TEMPLATE_PARTS
+from scripts.lib.common import TEMPLATE_PARTS, add_report_arg, write_report
 
 
 def _load_args(arguments):
@@ -70,7 +70,7 @@ def _rebuild_message(m: dict) -> dict:
 
 
 def train_tool_style(cfg: dict, stage_cfg: dict, dataset_path: str,
-                     stage_name: str):
+                     stage_name: str, report_path: str = None):
     """{messages, tools} 형식 데이터셋을 학습하는 공용 로직.
 
     tool 단계와 planact(계획-실행) 단계가 완전히 같은 데이터 형식을 쓰므로
@@ -146,10 +146,19 @@ def train_tool_style(cfg: dict, stage_cfg: dict, dataset_path: str,
 
     save_adapter(model, tokenizer, stage_cfg["output_dir"], stage_name)
 
+    write_report(report_path, {
+        "task": "train", "stage": stage_name, "status": "ok",
+        "n_samples": len(dataset),
+        "adapter_dir": os.path.join(stage_cfg["output_dir"], "final"),
+        "metrics": {"train_loss": float(stats.training_loss),
+                    **{k: v for k, v in (getattr(stats, "metrics", None) or {}).items()}},
+    })
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -160,7 +169,8 @@ def main():
             "tools_*.jsonl을 넣고 prepare_data.py를 돌리거나, "
             "generate_tool_calls.py로 먼저 생성하세요.")
 
-    train_tool_style(cfg, cfg["tool"], tool_path, "tool")
+    train_tool_style(cfg, cfg["tool"], tool_path, "tool",
+                     report_path=args.report_json)
 
 
 if __name__ == "__main__":

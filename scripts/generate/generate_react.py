@@ -20,7 +20,8 @@ import argparse
 import json
 import os
 
-from scripts.lib.common import load_config, messages_hash
+from scripts.lib.common import (load_config, messages_hash, add_report_arg,
+                                write_report)
 from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 # prepare_data의 정규화·검증 로직을 그대로 재사용 (unsloth 비의존)
 from scripts.data.prepare_data import normalize_react_sample
@@ -80,6 +81,7 @@ def main():
                         help="처리할 최대 청크 수 (테스트용)")
     parser.add_argument("--overwrite", action="store_true",
                         help="기존 react_dataset.jsonl을 덮어쓰기 (기본은 append)")
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -133,6 +135,9 @@ def main():
     print("\n[!] 생성된 트레이스는 사람이 표본 검수하세요. observation이 문서 사실과 "
           "어긋나거나 thought→action 연결이 비논리적이면 잘못된 추론 습관을 가르칩니다.\n"
           "    자세한 내용: docs/react.md")
+    write_report(args.report_json, {"task": "generate", "kind": "react",
+                                    "status": "ok", "generated": total,
+                                    "origin": origin})
 
 
 if __name__ == "__main__":

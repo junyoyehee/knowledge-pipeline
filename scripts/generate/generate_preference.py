@@ -32,7 +32,8 @@ import argparse
 import json
 import os
 
-from scripts.lib.common import load_config, messages_hash
+from scripts.lib.common import (load_config, messages_hash, add_report_arg,
+                                write_report)
 from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 
 # ---------------------------------------------------------------
@@ -283,6 +284,7 @@ def main():
                         help="KTO 데이터셋 파생 생략")
     parser.add_argument("--append", action="store_true",
                         help="기존 파일에 이어 쓰기 (기본은 덮어쓰기)")
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -338,6 +340,9 @@ def main():
     print("\n[!] 생성된 rejected는 반드시 사람이 표본 검수하세요. "
           "오답이 우연히 사실이면 모델에게 거짓을 가르치게 됩니다.\n"
           "    자세한 내용: docs/preference_tuning.md")
+    write_report(args.report_json, {"task": "generate", "kind": "preference",
+                                    "status": "ok", "generated": len(pairs),
+                                    "origin": llm.origin})
 
 
 if __name__ == "__main__":

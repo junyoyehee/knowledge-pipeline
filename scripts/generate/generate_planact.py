@@ -25,7 +25,8 @@ import argparse
 import json
 import os
 
-from scripts.lib.common import load_config, tool_sample_hash
+from scripts.lib.common import (load_config, tool_sample_hash, add_report_arg,
+                                write_report)
 from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 # 카탈로그 로더는 generate_tool_calls, 정규화는 prepare_data에서 재사용 (unsloth 비의존)
 from scripts.generate.generate_tool_calls import load_catalog
@@ -93,6 +94,7 @@ def main():
                         help="처리할 최대 청크 수 (테스트용)")
     parser.add_argument("--overwrite", action="store_true",
                         help="기존 planact_dataset.jsonl을 덮어쓰기 (기본은 append)")
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -157,6 +159,9 @@ def main():
     print("\n[!] 생성된 arguments·observation·계획은 반드시 사람이 표본 검수하세요. "
           "인자가 스키마와 어긋나거나 관찰이 사실과 다르면 잘못된 실행을 가르칩니다.\n"
           "    자세한 내용: docs/planact.md")
+    write_report(args.report_json, {"task": "generate", "kind": "planact",
+                                    "status": "ok", "generated": total,
+                                    "origin": origin})
 
 
 if __name__ == "__main__":

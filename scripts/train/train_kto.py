@@ -13,10 +13,12 @@ DPO와 달리 **쌍(pair)이 필요 없습니다.** 응답 하나하나에 "좋�
 출력: outputs/kto/ (LoRA 어댑터)
 """
 import argparse
+import os
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함
 from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
+from scripts.lib.common import add_report_arg, write_report
 
 from unsloth import is_bfloat16_supported
 
@@ -50,6 +52,7 @@ def check_balance(dataset, desirable_weight: float, undesirable_weight: float):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -99,6 +102,14 @@ def main():
     print(f"[OK] KTO 완료 — loss: {stats.training_loss:.4f}")
 
     save_adapter(model, tokenizer, stage_cfg["output_dir"], "kto")
+
+    write_report(args.report_json, {
+        "task": "train", "stage": "kto", "status": "ok",
+        "n_samples": len(dataset),
+        "adapter_dir": os.path.join(stage_cfg["output_dir"], "final"),
+        "metrics": {"train_loss": float(stats.training_loss),
+                    **{k: v for k, v in (getattr(stats, "metrics", None) or {}).items()}},
+    })
 
 
 if __name__ == "__main__":

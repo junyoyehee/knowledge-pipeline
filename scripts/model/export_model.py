@@ -16,7 +16,7 @@ import os
 
 from unsloth import FastLanguageModel
 
-from scripts.lib.common import load_config, stage_adapter
+from scripts.lib.common import load_config, stage_adapter, add_report_arg, write_report
 
 
 def main():
@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--stage", default=None,
                         help="병합할 단계 (sft/tool/plan/react/planact/dpo/orpo/kto). "
                              "생략하면 config의 export.source_stage 사용")
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -48,12 +49,17 @@ def main():
         ecfg["merged_dir"], tokenizer, save_method="merged_16bit")
     print(f"[OK] 병합 모델 저장: {ecfg['merged_dir']}")
 
+    gguf_dir = None
     if ecfg.get("save_gguf"):
         gguf_dir = ecfg["merged_dir"] + "_gguf"
         model.save_pretrained_gguf(
             gguf_dir, tokenizer,
             quantization_method=ecfg.get("gguf_quantization", "q4_k_m"))
         print(f"[OK] GGUF 저장: {gguf_dir}")
+
+    write_report(args.report_json, {
+        "task": "export", "stage": stage, "status": "ok",
+        "merged_dir": ecfg["merged_dir"], "gguf_dir": gguf_dir})
 
 
 if __name__ == "__main__":

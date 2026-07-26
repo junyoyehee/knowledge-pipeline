@@ -68,6 +68,26 @@ def _abs(path: str) -> str:
 
 
 # ---------------------------------------------------------------
+# 구조화 메트릭 리포트 (--report-json) — API 연동용
+# stdout 파싱 대신 완료 후 구조화된 결과를 JSON 파일로 남긴다.
+# ---------------------------------------------------------------
+
+def add_report_arg(parser) -> None:
+    """표준 --report-json 인자 추가."""
+    parser.add_argument("--report-json", default=None,
+                        help="완료 후 구조화 메트릭을 이 경로에 JSON으로 기록 (API 연동용)")
+
+
+def write_report(path: str, data: dict) -> None:
+    """report_json 경로가 주어지면 메트릭을 JSON으로 기록. None이면 무시."""
+    if not path:
+        return
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------
 # 메타정보 유틸 (자세한 설계 근거는 docs/meta_info.md 참고)
 # ---------------------------------------------------------------
 

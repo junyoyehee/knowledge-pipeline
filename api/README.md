@@ -128,4 +128,6 @@ PYTHONPATH=. python3 -m api.tests.test_e2e
 
 - 상시 저지연 서빙(vLLM Deployment)은 미포함 — 현재 추론은 잡 기반 간이 테스트.
 - 스케일아웃(Celery/RQ, 다중 GPU, S3), 멀티테넌시/쿼터, 웹 콘솔은 이후 단계.
-- 메트릭은 stdout 파싱 — 정밀 진행률은 스크립트에 `--report-json` 추가 권장.
+- 최종 메트릭은 스크립트가 남기는 `--report-json`(잡별 `report.json`)에서 수집합니다
+  (stdout 파싱은 폴백). **실시간 step 단위 진행률**은 아직 stdout 파싱이며, TrainerCallback
+  기반 정밀 진행률은 후속 작업입니다.

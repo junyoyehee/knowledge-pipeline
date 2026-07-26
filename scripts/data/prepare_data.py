@@ -47,7 +47,7 @@ import os
 import re
 
 from scripts.lib.common import (content_hash, load_config, messages_hash, slugify,
-                    tool_sample_hash)
+                    tool_sample_hash, add_report_arg, write_report)
 
 # ---------------------------------------------------------------
 # 샘플 데이터 (원문이 없을 때 파이프라인 검증용으로 생성됨)
@@ -898,6 +898,7 @@ def build_planact_meta(raw: dict, tools: list, messages: list,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    add_report_arg(parser)
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -1170,6 +1171,20 @@ def main():
     elif planact_out:
         print("[i] 계획-실행 파일(planact_*.jsonl)이 없어 planact 단계 데이터는 만들지 "
               "않았습니다. generate_planact.py로 생성하거나 planact 단계를 건너뛰세요.")
+
+    # ---------- 구조화 리포트 (--report-json) ----------
+    report_datasets = []
+    for kind, key in (("cpt", "cpt_dataset"), ("sft", "sft_dataset"),
+                      ("tool", "tool_dataset"), ("plan", "plan_dataset"),
+                      ("react", "react_dataset"), ("planact", "planact_dataset")):
+        path = cfg["data"].get(key)
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                n = sum(1 for line in f if line.strip())
+            report_datasets.append({"kind": kind, "count": n,
+                                    "file": os.path.basename(path)})
+    write_report(args.report_json, {"task": "prepare", "status": "ok",
+                                    "datasets": report_datasets})
 
 
 if __name__ == "__main__":

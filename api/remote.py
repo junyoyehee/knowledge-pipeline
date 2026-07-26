@@ -69,6 +69,12 @@ def pull_outputs(pid: str) -> None:
                    check=False, capture_output=True, text=True)
 
 
+def pull_file(abs_path) -> None:
+    """원격의 단일 파일(동일 절대경로)을 로컬로 회수. 없으면 무시."""
+    subprocess.run(_rsync_cmd(f"{config.REMOTE_HOST}:{abs_path}", str(abs_path)),
+                   check=False, capture_output=True, text=True)
+
+
 def build_cmd(module: str, extra: list[str], cfg_path) -> list[str]:
     """원격 실행 SSH 커맨드 구성. config 절대경로는 로컬=원격 미러 전제."""
     inner_parts = [f"cd {shlex.quote(config.REMOTE_DIR)} &&",
