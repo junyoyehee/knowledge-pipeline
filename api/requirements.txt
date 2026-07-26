@@ -1,0 +1,8 @@
+# 지식 파이프라인 API (Phase 1 MVP) 의존성
+# 학습/생성 스크립트 자체의 의존성은 프로젝트 루트 requirements.txt 참고.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9   # 파일 업로드
+pydantic>=2.6
+pyyaml>=6.0
+cryptography>=42.0        # 시크릿 암호화(Fernet)

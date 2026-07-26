@@ -4,7 +4,8 @@
 **HTTP API**로 제공하기 위한 설계안입니다. 구현 전에 합의할 아키텍처·리소스·엔드포인트를
 정리합니다. (구현은 아직 하지 않습니다.)
 
-- 상태: **초안(Draft)** — 리뷰 후 확정
+- 상태: **초안(Draft)** — 리뷰 후 확정. **Phase 1(MVP)은 [`api/`](../api/)에 구현됨**
+  (실행법: [api/README.md](../api/README.md)).
 - 대상 독자: 이 파이프라인을 서비스/자동화에 붙이려는 개발자
 - 관련 문서: [meta_info.md](meta_info.md) · [tool_calling.md](tool_calling.md) ·
   [planning.md](planning.md) · [react.md](react.md) · [planact.md](planact.md)

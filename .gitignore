@@ -4,6 +4,11 @@ outputs/
 # 가공된 학습 데이터 (prepare_data.py로 재생성 가능)
 data/processed/
 
+# API 런타임 데이터 (프로젝트 스토리지·SQLite·시크릿 키)
+storage/
+*.db
+.fernet_key
+
 # Python
 __pycache__/
 *.py[cod]
