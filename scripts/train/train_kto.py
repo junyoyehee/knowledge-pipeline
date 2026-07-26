@@ -7,15 +7,15 @@ DPO와 달리 **쌍(pair)이 필요 없습니다.** 응답 하나하나에 "좋�
 **지식을 주입하지 않습니다.** 반드시 docs/preference_tuning.md를 먼저 읽으세요.
 
 사용법:
-    python scripts/generate_preference.py      # 선호 쌍에서 KTO 데이터도 함께 생성됨
-    python scripts/train_kto.py [--config configs/config.yaml]
+    python -m scripts.generate.generate_preference      # 선호 쌍에서 KTO 데이터도 함께 생성됨
+    python -m scripts.train.train_kto [--config configs/config.yaml]
 
 출력: outputs/kto/ (LoRA 어댑터)
 """
 import argparse
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함
-from pref_common import (load_config, load_model, load_pref_dataset,
+from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
 
 from unsloth import is_bfloat16_supported

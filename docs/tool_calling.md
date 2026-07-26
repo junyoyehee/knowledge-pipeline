@@ -80,7 +80,7 @@ CPT (지식 축적) ──► SFT (지식 활용) ──► [tool] 툴 호출 �
 `data/raw/tools_사내API.jsonl` 처럼 넣고 `prepare_data.py`를 돌립니다.
 
 ```bash
-python scripts/prepare_data.py
+python -m scripts.data.prepare_data
 # [OK] 툴 호출 데이터셋: N개 대화 → data/processed/tool_dataset.jsonl
 ```
 
@@ -95,7 +95,7 @@ export QA_GEN_MODEL="qwen2.5:14b"
 
 # 함수 카탈로그: 함수 스키마 배열이 담긴 JSON 파일
 #   생략하면 data/raw/tools_catalog.json → 그것도 없으면 내장 샘플 카탈로그 사용
-python scripts/generate_tool_calls.py --tools data/raw/tools_catalog.json --per-chunk 2
+python -m scripts.generate.generate_tool_calls --tools data/raw/tools_catalog.json --per-chunk 2
 ```
 
 `tools_catalog.json` 예시(함수 스키마만 담은 배열):
@@ -123,7 +123,7 @@ python scripts/generate_tool_calls.py --tools data/raw/tools_catalog.json --per-
 ## 3. 학습
 
 ```bash
-python scripts/train_tool.py
+python -m scripts.train.train_tool
 ```
 
 - 시작 지점은 `config.yaml`의 `tool.init_from`으로 정합니다.
@@ -144,11 +144,11 @@ python scripts/train_tool.py
 
 ```bash
 # 테스트: 함수 스키마를 자동으로 제공해 실제로 tool_call이 나오는지 확인
-python scripts/test_model.py --stage tool
-python scripts/test_model.py --stage tool -q "3등급 코어스톤 정보 알려줘"
+python -m scripts.model.test_model --stage tool
+python -m scripts.model.test_model --stage tool -q "3등급 코어스톤 정보 알려줘"
 
 # 병합 (16bit / GGUF)
-python scripts/export_model.py --stage tool
+python -m scripts.model.export_model --stage tool
 ```
 
 `test_model.py --stage tool`은 `--tools`가 없으면 `tool_dataset.jsonl`의

@@ -10,15 +10,15 @@ SFT와 선호 학습을 **한 단계로 합칩니다.** chosen에 대한 일반�
 반드시 docs/preference_tuning.md를 먼저 읽으세요.
 
 사용법:
-    python scripts/generate_preference.py
-    python scripts/train_orpo.py [--config configs/config.yaml]
+    python -m scripts.generate.generate_preference
+    python -m scripts.train.train_orpo [--config configs/config.yaml]
 
 출력: outputs/orpo/ (LoRA 어댑터)
 """
 import argparse
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함
-from pref_common import (load_config, load_model, load_pref_dataset,
+from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
 
 from unsloth import is_bfloat16_supported

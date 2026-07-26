@@ -14,8 +14,8 @@ LLM에는 {goal, plan, steps:[{tool, arguments, observation}], final_answer} 형
 사용법:
     export QA_GEN_BASE_URL="http://localhost:11434/v1"
     export QA_GEN_MODEL="qwen2.5:14b"
-    python scripts/generate_planact.py --per-chunk 1
-    python scripts/generate_planact.py --tools data/raw/tools_catalog.json --overwrite
+    python -m scripts.generate.generate_planact --per-chunk 1
+    python -m scripts.generate.generate_planact --tools data/raw/tools_catalog.json --overwrite
 
 출력: data/processed/planact_dataset.jsonl 에 append (기본)
     {"messages": [...], "tools": "<JSON>", "meta": {"origin": "llm:<모델>", ...}}
@@ -25,11 +25,11 @@ import argparse
 import json
 import os
 
-from common import load_config, tool_sample_hash
-from llm_client import call_llm, extract_json_array, resolve_env
+from scripts.lib.common import load_config, tool_sample_hash
+from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 # 카탈로그 로더는 generate_tool_calls, 정규화는 prepare_data에서 재사용 (unsloth 비의존)
-from generate_tool_calls import load_catalog
-from prepare_data import normalize_planact_sample
+from scripts.generate.generate_tool_calls import load_catalog
+from scripts.data.prepare_data import normalize_planact_sample
 
 PROMPT_TEMPLATE = """당신은 '계획 후 도구 실행'(plan-and-execute) 학습 데이터를 만드는 전문가입니다.
 아래 [사용 가능한 함수]와 [참고 문서]를 보고, 사용자의 목표를 함수 호출로 해결하는

@@ -20,23 +20,26 @@ _STEP_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
 
 
 def _script_for(job: dict) -> list[str]:
-    """잡 타입/스테이지 → 실행할 스크립트 인자 목록 (config는 호출부에서 추가)."""
+    """잡 타입/스테이지 → 실행할 모듈과 추가 인자.
+
+    반환 [0]은 `python -m` 으로 실행할 모듈 경로, [1:]은 추가 CLI 인자.
+    (config는 호출부에서 --config로 덧붙인다.)
+    """
     jtype = job["type"]
     params = job.get("params") or {}
-    S = str(config.SCRIPTS_DIR)
 
     if jtype == "prepare":
-        return [f"{S}/prepare_data.py"]
+        return ["scripts.data.prepare_data"]
     if jtype == "generate":
         kind = params.get("kind")
-        script = {
-            "qa": "generate_qa.py", "tool": "generate_tool_calls.py",
-            "plan": "generate_plans.py", "react": "generate_react.py",
-            "planact": "generate_planact.py", "preference": "generate_preference.py",
+        module = {
+            "qa": "generate_qa", "tool": "generate_tool_calls",
+            "plan": "generate_plans", "react": "generate_react",
+            "planact": "generate_planact", "preference": "generate_preference",
         }.get(kind)
-        if not script:
+        if not module:
             raise ValueError(f"알 수 없는 generate kind: {kind}")
-        args = [f"{S}/{script}"]
+        args = [f"scripts.generate.{module}"]
         for flag in ("per_chunk", "max_chunks", "per_sample", "refusals_per_chunk"):
             if params.get(flag) is not None:
                 args += [f"--{flag.replace('_', '-')}", str(params[flag])]
@@ -50,22 +53,17 @@ def _script_for(job: dict) -> list[str]:
         return args
     if jtype == "train":
         stage = job["stage"]
-        script = {
-            "cpt": "train_cpt.py", "sft": "train_sft.py", "tool": "train_tool.py",
-            "plan": "train_plan.py", "react": "train_react.py",
-            "planact": "train_planact.py", "dpo": "train_dpo.py",
-            "orpo": "train_orpo.py", "kto": "train_kto.py",
-        }.get(stage)
-        if not script:
+        if stage not in ("cpt", "sft", "tool", "plan", "react", "planact",
+                         "dpo", "orpo", "kto"):
             raise ValueError(f"알 수 없는 train stage: {stage}")
-        return [f"{S}/{script}"]
+        return [f"scripts.train.train_{stage}"]
     if jtype == "export":
-        args = [f"{S}/export_model.py"]
+        args = ["scripts.model.export_model"]
         if job.get("stage"):
             args += ["--stage", job["stage"]]
         return args
     if jtype == "infer":
-        args = [f"{S}/test_model.py", "--stage", job.get("stage") or "sft"]
+        args = ["scripts.model.test_model", "--stage", job.get("stage") or "sft"]
         for q in (params.get("questions") or []):
             args += ["-q", q]
         if params.get("max_new_tokens"):
@@ -91,8 +89,9 @@ def run_job(job: dict) -> None:
         if rejected:
             store.update_job(jid, progress={"rejected_overrides": rejected})
 
-        # 2) 커맨드 구성
-        cmd = [config.PYTHON, *_script_for(job), "--config", str(cfg_path)]
+        # 2) 커맨드 구성 (기존 스크립트를 패키지 모듈로 실행: python -m scripts.<group>.<name>)
+        module, *extra = _script_for(job)
+        cmd = [config.PYTHON, "-m", module, *extra, "--config", str(cfg_path)]
 
         # 3) 환경변수 (generate 잡은 LLM 시크릿 주입)
         env = os.environ.copy()

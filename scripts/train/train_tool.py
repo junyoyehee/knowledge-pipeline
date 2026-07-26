@@ -11,9 +11,9 @@
     경로/기타   → 그 모델 위에 새 LoRA 부착
 
 사용법:
-    python scripts/prepare_data.py            # tools_*.jsonl → tool_dataset.jsonl
-    python scripts/generate_tool_calls.py     # (선택) LLM으로 자동 생성
-    python scripts/train_tool.py [--config configs/config.yaml]
+    python -m scripts.data.prepare_data            # tools_*.jsonl → tool_dataset.jsonl
+    python -m scripts.generate.generate_tool_calls     # (선택) LLM으로 자동 생성
+    python -m scripts.train.train_tool [--config configs/config.yaml]
 
 출력: outputs/tool/ (LoRA 어댑터)
 """
@@ -22,7 +22,7 @@ import json
 import os
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함 (pref_common이 unsloth를 import)
-from pref_common import load_config, load_stage_model, save_adapter
+from scripts.lib.pref_common import load_config, load_stage_model, save_adapter
 
 from unsloth import is_bfloat16_supported
 from unsloth.chat_templates import train_on_responses_only
@@ -31,7 +31,7 @@ from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
-from common import TEMPLATE_PARTS
+from scripts.lib.common import TEMPLATE_PARTS
 
 
 def _load_args(arguments):

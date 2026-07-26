@@ -1,42 +1,49 @@
 """
-(선택) 계획수립(planning) 학습 데이터 자동 생성
-- CPT 데이터셋의 각 청크를 LLM에 보내, 그 도메인에서 세울 법한 '목표'와
-  '단계별 계획'을 생성 → plan_dataset 보강
+(선택) 추론형(ReAct) 학습 데이터 자동 생성
+- CPT 데이터셋의 각 청크를 LLM에 보내, 그 문서로 답할 수 있는 질문과 함께
+  Thought/Action/Observation을 반복하는 추론 트레이스를 생성
 - OpenAI 호환 API 사용 (vLLM / Ollama / OpenAI / 사내 게이트웨이)
 
-LLM에는 {goal, steps} 평면 형식으로 받고, prepare_data.py와 동일한 검증기
-(normalize_plan_sample)를 통과한 것만 저장합니다.
+LLM에는 {question, steps:[{thought,action,observation}], final_answer} 형식으로 받고,
+prepare_data.py와 동일한 검증기(normalize_react_sample)를 통과한 것만 저장합니다.
 
 사용법:
     export QA_GEN_BASE_URL="http://localhost:11434/v1"
     export QA_GEN_MODEL="qwen2.5:14b"
-    python scripts/generate_plans.py [--per-chunk 2] [--overwrite]
+    python -m scripts.generate.generate_react [--per-chunk 2] [--overwrite]
 
-출력: data/processed/plan_dataset.jsonl 에 append (기본)
+출력: data/processed/react_dataset.jsonl 에 append (기본)
     {"messages": [...], "meta": {"origin": "llm:<모델>", "n_steps": N, ...}}
-    meta 필드의 의미는 docs/meta_info.md, 형식은 docs/planning.md 참고
+    meta 필드의 의미는 docs/meta_info.md, 형식은 docs/react.md 참고
 """
 import argparse
 import json
 import os
 
-from common import load_config, messages_hash
-from llm_client import call_llm, extract_json_array, resolve_env
+from scripts.lib.common import load_config, messages_hash
+from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 # prepare_data의 정규화·검증 로직을 그대로 재사용 (unsloth 비의존)
-from prepare_data import normalize_plan_sample
+from scripts.data.prepare_data import normalize_react_sample
 
-PROMPT_TEMPLATE = """다음 문서를 바탕으로, 이 세계관/도메인에서 누군가 세울 법한
-'목표(goal)'와 그 목표를 달성하기 위한 '단계별 계획(steps)'을 {n}세트 만들어주세요.
+PROMPT_TEMPLATE = """다음 문서를 근거로, 이 문서를 참고해야 답할 수 있는 질문과
+그 질문을 푸는 추론 과정(ReAct)을 {n}세트 만들어주세요.
+
+각 세트는 다음을 포함합니다:
+- question: 문서 내용을 근거로 답할 수 있는 질문 (한국어)
+- steps: 추론 단계 배열. 각 단계는
+    - thought: 지금 무엇을 왜 확인하는지에 대한 생각 (한국어)
+    - action: 취하는 행동. "도구이름[입력]" 형태의 한 줄 (예: search[코어스톤 등급])
+    - observation: 그 행동으로 얻었을 법한 결과. 반드시 문서 내용에 근거할 것
+- final_answer: 관찰들을 종합한 최종 답변
 
 규칙:
-- goal: 문서 주제와 관련된 현실적인 목표 (한국어, 한 문장)
-- steps: 목표 달성을 위한 순서 있는 단계 배열 (3~6개, 각 단계는 구체적 행동 한 줄)
-- 각 단계는 문서 내용에 근거하되, 문서에 없는 사실을 지어내지 말 것
-- 단계는 논리적 순서를 따를 것 (앞 단계의 결과가 뒤 단계의 전제가 되도록)
-- "문서에 따르면" 같은 표현은 쓰지 말 것
+- steps는 1~4개. 마지막에 답을 낼 수 있을 만큼만 최소한으로.
+- observation은 문서에 실제로 있는 사실만 담을 것 (없는 정보를 지어내지 말 것)
+- 각 thought는 바로 다음 action으로 자연스럽게 이어질 것
+- 문서를 안 봐도 상식으로 답할 수 있는 질문은 만들지 말 것
 
 반드시 아래 JSON 배열 형식으로만 출력:
-[{{"goal": "목표", "steps": ["1단계 내용", "2단계 내용", "3단계 내용"]}}, ...]
+[{{"question": "...", "steps": [{{"thought": "...", "action": "search[...]", "observation": "..."}}], "final_answer": "..."}}, ...]
 
 문서:
 ---
@@ -68,11 +75,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
     parser.add_argument("--per-chunk", type=int, default=2,
-                        help="청크당 생성할 계획 세트 수")
+                        help="청크당 생성할 추론 트레이스 수")
     parser.add_argument("--max-chunks", type=int, default=None,
                         help="처리할 최대 청크 수 (테스트용)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="기존 plan_dataset.jsonl을 덮어쓰기 (기본은 append)")
+                        help="기존 react_dataset.jsonl을 덮어쓰기 (기본은 append)")
     args = parser.parse_args()
     cfg = load_config(args.config)
 
@@ -82,7 +89,7 @@ def main():
         chunks = chunks[:args.max_chunks]
 
     origin = f"llm:{model}"
-    out_path = cfg["data"]["plan_dataset"]
+    out_path = cfg["data"]["react_dataset"]
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     mode = "w" if args.overwrite else "a"
 
@@ -91,7 +98,7 @@ def main():
         for i, chunk in enumerate(chunks, 1):
             prompt = PROMPT_TEMPLATE.format(n=args.per_chunk, chunk=chunk["text"])
             try:
-                # 목표·계획은 다양성이 필요하므로 온도를 약간 높인다
+                # 추론 경로에 다양성이 필요하므로 온도를 약간 높인다
                 response = call_llm(base_url, api_key, model, prompt,
                                     temperature=0.7)
                 items = extract_json_array(response)
@@ -101,13 +108,13 @@ def main():
 
             made = 0
             for j, raw in enumerate(items):
-                sample = normalize_plan_sample(raw)
+                sample = normalize_react_sample(raw)
                 if not sample:
                     continue
                 record = {
                     "messages": sample["messages"],
                     "meta": {
-                        "id": f"genplan-{chunk['chunk_id']}-{j}",
+                        "id": f"genreact-{chunk['chunk_id']}-{j}",
                         "source": chunk["source"],
                         "chunk_id": chunk["chunk_id"],
                         "origin": origin,
@@ -118,14 +125,14 @@ def main():
                 out.write(json.dumps(record, ensure_ascii=False) + "\n")
                 made += 1
             total += made
-            print(f"[{i}/{len(chunks)}] 계획 {made}개 생성 (누적 {total})")
+            print(f"[{i}/{len(chunks)}] 트레이스 {made}개 생성 (누적 {total})")
 
     if not total:
-        raise SystemExit("[!] 생성된 계획이 없습니다. LLM 응답 형식을 확인하세요.")
-    print(f"[OK] 총 {total}개 계획 → {out_path}")
-    print("\n[!] 생성된 계획은 사람이 표본 검수하세요. 단계가 문서 사실과 어긋나거나 "
-          "순서가 비논리적이면 모델에 잘못된 계획 습관을 가르칠 수 있습니다.\n"
-          "    자세한 내용: docs/planning.md")
+        raise SystemExit("[!] 생성된 트레이스가 없습니다. LLM 응답 형식을 확인하세요.")
+    print(f"[OK] 총 {total}개 ReAct 트레이스 → {out_path}")
+    print("\n[!] 생성된 트레이스는 사람이 표본 검수하세요. observation이 문서 사실과 "
+          "어긋나거나 thought→action 연결이 비논리적이면 잘못된 추론 습관을 가르칩니다.\n"
+          "    자세한 내용: docs/react.md")
 
 
 if __name__ == "__main__":

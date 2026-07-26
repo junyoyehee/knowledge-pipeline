@@ -8,15 +8,15 @@
 반드시 docs/preference_tuning.md를 먼저 읽으세요.
 
 사용법:
-    python scripts/generate_preference.py     # 데이터 먼저 생성
-    python scripts/train_dpo.py [--config configs/config.yaml]
+    python -m scripts.generate.generate_preference     # 데이터 먼저 생성
+    python -m scripts.train.train_dpo [--config configs/config.yaml]
 
 출력: outputs/dpo/ (LoRA 어댑터)
 """
 import argparse
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함 (pref_common이 unsloth를 import)
-from pref_common import (load_config, load_model, load_pref_dataset,
+from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
 
 # 구버전 unsloth는 DPO 최적화를 위해 명시적 패치가 필요했음. 신버전은 불필요.

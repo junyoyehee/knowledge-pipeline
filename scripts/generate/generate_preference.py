@@ -17,10 +17,10 @@
 사용법:
     export QA_GEN_BASE_URL="http://localhost:11434/v1"
     export QA_GEN_MODEL="qwen2.5:14b"
-    python scripts/generate_preference.py                    # from-sft (기본)
-    python scripts/generate_preference.py --mode from-chunks --per-chunk 3
-    python scripts/generate_preference.py --refusals-per-chunk 1
-    python scripts/generate_preference.py --no-kto           # KTO 파일 생성 생략
+    python -m scripts.generate.generate_preference                    # from-sft (기본)
+    python -m scripts.generate.generate_preference --mode from-chunks --per-chunk 3
+    python -m scripts.generate.generate_preference --refusals-per-chunk 1
+    python -m scripts.generate.generate_preference --no-kto           # KTO 파일 생성 생략
 
 출력:
     data/processed/pref_dataset.jsonl  (DPO/ORPO 공용)
@@ -32,8 +32,8 @@ import argparse
 import json
 import os
 
-from common import load_config, messages_hash
-from llm_client import call_llm, extract_json_array, resolve_env
+from scripts.lib.common import load_config, messages_hash
+from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 
 # ---------------------------------------------------------------
 # 프롬프트

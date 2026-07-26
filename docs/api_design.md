@@ -60,7 +60,7 @@ flowchart LR
     API -->|read/write| FS[(아티팩트 스토리지<br/>raw / processed / outputs)]
     W1[CPU 워커<br/>prepare·generate] -->|dequeue| Q
     W2[GPU 워커<br/>동시성=1<br/>train·export·infer] -->|dequeue| Q
-    W1 & W2 -->|subprocess: python scripts/*.py --config| Sub[기존 파이프라인 스크립트]
+    W1 & W2 -->|subprocess: python -m scripts.<group>.<name> --config| Sub[기존 파이프라인 스크립트]
     Sub --> FS
     W1 & W2 -->|status·logs·metrics| Q
 ```
@@ -72,7 +72,7 @@ API는 요청 파라미터로 **잡별 config.yaml을 생성**하고, 기존 스
 ```
 POST /train {stage:"sft", overrides:{...}}
   → 잡 생성 → {job_dir}/config.yaml 작성(프로젝트 경로 + 기본값 + overrides 병합)
-  → subprocess: python scripts/train_sft.py --config {job_dir}/config.yaml
+  → subprocess: python -m scripts.train.train_sft --config {job_dir}/config.yaml
   → stdout 캡처 → 로그 저장 + "[OK] ... loss: X" 파싱 → 메트릭
   → 종료코드로 성공/실패 판정, outputs/sft/final 을 아티팩트로 등록
 ```

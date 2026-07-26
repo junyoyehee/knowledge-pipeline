@@ -5,7 +5,7 @@
 - 원문/QA가 하나도 없으면 샘플 데이터를 자동 생성 (파이프라인 동작 확인용)
 
 사용법:
-    python scripts/prepare_data.py [--config configs/config.yaml]
+    python -m scripts.data.prepare_data [--config configs/config.yaml]
 
 입력 형식:
     data/raw/*.txt, *.md          : 도메인 원문 문서
@@ -46,7 +46,7 @@ import json
 import os
 import re
 
-from common import (content_hash, load_config, messages_hash, slugify,
+from scripts.lib.common import (content_hash, load_config, messages_hash, slugify,
                     tool_sample_hash)
 
 # ---------------------------------------------------------------

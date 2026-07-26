@@ -14,9 +14,9 @@ prepare_data.py와 동일한 검증기(normalize_tool_sample)를 통과한 것�
 사용법:
     export QA_GEN_BASE_URL="http://localhost:11434/v1"
     export QA_GEN_MODEL="qwen2.5:14b"
-    python scripts/generate_tool_calls.py --per-chunk 2
-    python scripts/generate_tool_calls.py --tools data/raw/tools_catalog.json
-    python scripts/generate_tool_calls.py --overwrite      # 기존 파일 덮어쓰기
+    python -m scripts.generate.generate_tool_calls --per-chunk 2
+    python -m scripts.generate.generate_tool_calls --tools data/raw/tools_catalog.json
+    python -m scripts.generate.generate_tool_calls --overwrite      # 기존 파일 덮어쓰기
 
 출력: data/processed/tool_dataset.jsonl 에 append (기본)
     {"messages": [...], "tools": "<JSON>", "meta": {"origin": "llm:<모델>", ...}}
@@ -26,10 +26,10 @@ import argparse
 import json
 import os
 
-from common import PROJECT_ROOT, load_config, tool_sample_hash
-from llm_client import call_llm, extract_json_array, resolve_env
+from scripts.lib.common import PROJECT_ROOT, load_config, tool_sample_hash
+from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 # prepare_data의 정규화·검증 로직을 그대로 재사용 (unsloth 비의존)
-from prepare_data import SAMPLE_TOOLS, _normalize_tools, normalize_tool_sample
+from scripts.data.prepare_data import SAMPLE_TOOLS, _normalize_tools, normalize_tool_sample
 
 PROMPT_TEMPLATE = """당신은 함수 호출(tool calling) 학습 데이터를 만드는 전문가입니다.
 아래 [사용 가능한 함수]와 [참고 문서]를 보고, 사용자가 이 함수를 써야만 답할 수 있는

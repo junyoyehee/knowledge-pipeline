@@ -7,7 +7,7 @@
     export QA_GEN_BASE_URL="http://localhost:11434/v1"   # 예: Ollama
     export QA_GEN_API_KEY="dummy"
     export QA_GEN_MODEL="qwen2.5:14b"
-    python scripts/generate_qa.py [--config configs/config.yaml] [--per-chunk 3]
+    python -m scripts.generate.generate_qa [--config configs/config.yaml] [--per-chunk 3]
 
 출력: data/processed/sft_dataset.jsonl 에 append
       {"messages": [...], "meta": {"origin": "llm:<모델>", "chunk_id": ..., ...}}
@@ -17,8 +17,8 @@ import argparse
 import json
 import os
 
-from common import load_config, messages_hash
-from llm_client import call_llm, extract_json_array, resolve_env
+from scripts.lib.common import load_config, messages_hash
+from scripts.lib.llm_client import call_llm, extract_json_array, resolve_env
 
 PROMPT_TEMPLATE = """다음 문서 내용을 바탕으로, 문서에 담긴 지식을 확인하는 질문-답변 쌍을 {n}개 만들어주세요.
 

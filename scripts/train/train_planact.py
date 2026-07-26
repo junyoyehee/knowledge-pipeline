@@ -12,9 +12,9 @@
     "base"/경로 → 그 모델 위에 새 LoRA 부착
 
 사용법:
-    python scripts/prepare_data.py            # planact_*.jsonl → planact_dataset.jsonl
-    python scripts/generate_planact.py        # (선택) LLM으로 자동 생성
-    python scripts/train_planact.py [--config configs/config.yaml]
+    python -m scripts.data.prepare_data            # planact_*.jsonl → planact_dataset.jsonl
+    python -m scripts.generate.generate_planact        # (선택) LLM으로 자동 생성
+    python -m scripts.train.train_planact [--config configs/config.yaml]
 
 출력: outputs/planact/ (LoRA 어댑터)
 """
@@ -23,8 +23,8 @@ import os
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함.
 # train_tool이 pref_common→unsloth를 먼저 import하므로 여기서 가져오면 순서가 지켜진다.
-from train_tool import train_tool_style
-from pref_common import load_config
+from scripts.train.train_tool import train_tool_style
+from scripts.lib.pref_common import load_config
 
 
 def main():

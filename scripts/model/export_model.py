@@ -4,19 +4,19 @@
 - 선택적으로 GGUF(q4_k_m)로도 저장 (llama.cpp / Ollama 배포용)
 
 사용법:
-    python scripts/export_model.py [--config configs/config.yaml]
-    python scripts/export_model.py --stage tool   # 툴 호출 어댑터 병합
-    python scripts/export_model.py --stage plan   # 계획수립 어댑터 병합
-    python scripts/export_model.py --stage react  # 추론형(ReAct) 어댑터 병합
-    python scripts/export_model.py --stage planact # 계획-실행 어댑터 병합
-    python scripts/export_model.py --stage dpo    # 선호 학습 어댑터 병합
+    python -m scripts.model.export_model [--config configs/config.yaml]
+    python -m scripts.model.export_model --stage tool   # 툴 호출 어댑터 병합
+    python -m scripts.model.export_model --stage plan   # 계획수립 어댑터 병합
+    python -m scripts.model.export_model --stage react  # 추론형(ReAct) 어댑터 병합
+    python -m scripts.model.export_model --stage planact # 계획-실행 어댑터 병합
+    python -m scripts.model.export_model --stage dpo    # 선호 학습 어댑터 병합
 """
 import argparse
 import os
 
 from unsloth import FastLanguageModel
 
-from common import load_config, stage_adapter
+from scripts.lib.common import load_config, stage_adapter
 
 
 def main():

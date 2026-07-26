@@ -77,7 +77,7 @@ CPT (지식 축적) ──► SFT (지식 활용) ──► [react] 추론형 �
 
 ### 라벨 커스터마이즈
 
-`Thought/Action/Observation/Final Answer` 라벨은 `scripts/prepare_data.py`의
+`Thought/Action/Observation/Final Answer` 라벨은 `scripts/data/prepare_data.py`의
 `REACT_LABELS` 상수에서 한 곳으로 관리됩니다. 한국어 라벨(`생각/행동/관찰/최종 답변`)
 등으로 바꾸고 싶으면 이 값만 수정하면 렌더링 전체가 따라갑니다.
 
@@ -90,7 +90,7 @@ CPT (지식 축적) ──► SFT (지식 활용) ──► [react] 추론형 �
 `data/raw/react_운영.jsonl` 처럼 넣고 `prepare_data.py`를 돌립니다.
 
 ```bash
-python scripts/prepare_data.py
+python -m scripts.data.prepare_data
 # [OK] ReAct 데이터셋: N개 트레이스 → data/processed/react_dataset.jsonl
 ```
 
@@ -101,7 +101,7 @@ python scripts/prepare_data.py
 ```bash
 export QA_GEN_BASE_URL="http://localhost:11434/v1"
 export QA_GEN_MODEL="qwen2.5:14b"
-python scripts/generate_react.py --per-chunk 2
+python -m scripts.generate.generate_react --per-chunk 2
 ```
 
 LLM에게 `{question, steps, final_answer}` 형식으로 받은 뒤 **`prepare_data.py`와
@@ -115,7 +115,7 @@ LLM에게 `{question, steps, final_answer}` 형식으로 받은 뒤 **`prepare_d
 ## 3. 학습
 
 ```bash
-python scripts/train_react.py
+python -m scripts.train.train_react
 ```
 
 - 시작 지점은 `config.yaml`의 `react.init_from`으로 정합니다.
@@ -132,10 +132,10 @@ python scripts/train_react.py
 ## 4. 테스트 · 병합
 
 ```bash
-python scripts/test_model.py --stage react
-python scripts/test_model.py --stage react -q "코어스톤과 낙토 현상의 관계를 조사해줘"
+python -m scripts.model.test_model --stage react
+python -m scripts.model.test_model --stage react -q "코어스톤과 낙토 현상의 관계를 조사해줘"
 
-python scripts/export_model.py --stage react
+python -m scripts.model.export_model --stage react
 ```
 
 > **테스트 시 유의점:** 학습된 모델은 질문을 받으면 `Thought:`/`Action:`을 생성합니다.

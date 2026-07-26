@@ -7,7 +7,7 @@
   * UnslothTrainer 사용 (embedding_learning_rate 지원)
 
 사용법:
-    python scripts/train_cpt.py [--config configs/config.yaml]
+    python -m scripts.train.train_cpt [--config configs/config.yaml]
 
 출력: outputs/cpt/ (LoRA 어댑터)
 """
@@ -20,7 +20,7 @@ from unsloth import is_bfloat16_supported
 
 from datasets import load_dataset
 
-from common import load_config
+from scripts.lib.common import load_config
 
 
 def main():

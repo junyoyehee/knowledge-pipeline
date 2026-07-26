@@ -4,7 +4,7 @@
 - 응답 부분에만 loss를 계산 (train_on_responses_only)
 
 사용법:
-    python scripts/train_sft.py [--config configs/config.yaml]
+    python -m scripts.train.train_sft [--config configs/config.yaml]
 
 출력: outputs/sft/ (LoRA 어댑터)
 """
@@ -20,7 +20,7 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 
 # 채팅 템플릿별 user/assistant 구분 토큰 (train_tool.py와 공용)
-from common import load_config, TEMPLATE_PARTS
+from scripts.lib.common import load_config, TEMPLATE_PARTS
 
 
 def main():

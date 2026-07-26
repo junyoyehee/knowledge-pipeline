@@ -1,28 +1,26 @@
 """
-(선택) 추론형(ReAct) 학습 단계 — Thought/Action/Observation 반복 추론 능력 주입
-- 지식 SFT 어댑터(기본) 위에 'ReAct 트레이스'를 전용으로 학습하는 별도 단계
-- 데이터는 멀티턴 대화로, Observation은 user 턴으로 들어가 있어
-  train_on_responses_only가 자동으로 마스킹한다. 즉 모델은 Thought+Action과
-  Final Answer만 생성하도록 배우고, Observation은 학습 대상이 아니다.
-  (모델이 관찰 결과를 지어내도록 학습하는 것을 방지)
+(선택) 계획수립(planning) 학습 단계 — 목표 → 단계별 계획 능력 주입
+- 지식 SFT 어댑터(기본) 위에 '목표를 받아 실행 가능한 단계별 계획을 세우는' 능력을
+  전용으로 학습하는 별도 단계
+- 응답(계획)에만 loss 계산 (목표/질문 부분은 마스킹)
 
-시작 지점(config의 react.init_from):
-    "sft"(기본) → 지식 SFT 어댑터를 이어받아 추론 능력만 추가
-    "tool"      → 툴 호출 어댑터 위에 추론까지 얹고 싶을 때
-    "base"/경로 → 그 모델 위에 새 LoRA 부착
+시작 지점(config의 plan.init_from):
+    "sft"(기본) → 지식 SFT 어댑터를 이어받아 계획 능력만 추가
+    "base"      → 베이스 모델에서 계획 능력만 학습 (지식과 분리)
+    경로/기타   → 그 모델 위에 새 LoRA 부착
 
 사용법:
-    python scripts/prepare_data.py            # react_*.jsonl → react_dataset.jsonl
-    python scripts/generate_react.py          # (선택) LLM으로 자동 생성
-    python scripts/train_react.py [--config configs/config.yaml]
+    python -m scripts.data.prepare_data            # plans_*.jsonl → plan_dataset.jsonl
+    python -m scripts.generate.generate_plans          # (선택) LLM으로 자동 생성
+    python -m scripts.train.train_plan [--config configs/config.yaml]
 
-출력: outputs/react/ (LoRA 어댑터)
+출력: outputs/plan/ (LoRA 어댑터)
 """
 import argparse
 import os
 
 # unsloth는 transformers/trl보다 먼저 import되어야 함 (pref_common이 unsloth를 import)
-from pref_common import load_config, load_stage_model, save_adapter
+from scripts.lib.pref_common import load_config, load_stage_model, save_adapter
 
 from unsloth import is_bfloat16_supported
 from unsloth.chat_templates import train_on_responses_only
@@ -31,7 +29,7 @@ from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
-from common import TEMPLATE_PARTS
+from scripts.lib.common import TEMPLATE_PARTS
 
 
 def main():
@@ -40,21 +38,21 @@ def main():
     args = parser.parse_args()
     cfg = load_config(args.config)
 
-    mcfg, stage_cfg = cfg["model"], cfg["react"]
+    mcfg, stage_cfg = cfg["model"], cfg["plan"]
     tcfg = stage_cfg["train"]
 
-    react_path = cfg["data"].get("react_dataset")
-    if not react_path or not os.path.exists(react_path):
+    plan_path = cfg["data"].get("plan_dataset")
+    if not plan_path or not os.path.exists(plan_path):
         raise SystemExit(
-            f"ReAct 데이터셋이 없습니다: {react_path}\n"
-            "react_*.jsonl을 넣고 prepare_data.py를 돌리거나, "
-            "generate_react.py로 먼저 생성하세요.")
+            f"계획수립 데이터셋이 없습니다: {plan_path}\n"
+            "plans_*.jsonl을 넣고 prepare_data.py를 돌리거나, "
+            "generate_plans.py로 먼저 생성하세요.")
 
-    model, tokenizer = load_stage_model(cfg, stage_cfg, "react")
+    model, tokenizer = load_stage_model(cfg, stage_cfg, "plan")
     template_name = mcfg["chat_template"]
 
     # ---------- 데이터셋 ----------
-    dataset = load_dataset("json", data_files=react_path, split="train")
+    dataset = load_dataset("json", data_files=plan_path, split="train")
     default_system = stage_cfg.get("system_prompt")
 
     def to_text(examples):
@@ -69,7 +67,7 @@ def main():
 
     dataset = dataset.map(to_text, batched=True,
                           remove_columns=dataset.column_names)
-    print(f"[i] ReAct 학습 샘플 수: {len(dataset)}")
+    print(f"[i] PLAN 학습 샘플 수: {len(dataset)}")
 
     # ---------- 학습 ----------
     trainer = SFTTrainer(
@@ -100,8 +98,7 @@ def main():
         ),
     )
 
-    # 응답(Thought+Action, Final Answer)만 loss 계산.
-    # Observation은 user 턴으로 렌더링되어 instruction_part로 마스킹된다.
+    # 응답(계획)만 loss 계산. 목표(질문) 부분은 마스킹.
     if tcfg.get("train_on_responses_only", True):
         parts = TEMPLATE_PARTS.get(template_name)
         if parts:
@@ -112,11 +109,11 @@ def main():
                   "전체 시퀀스로 학습합니다. common.py의 TEMPLATE_PARTS에 추가하세요.")
 
     stats = trainer.train()
-    print(f"[OK] ReAct 완료 — loss: {stats.training_loss:.4f}")
-    print("[i] 병합하려면 export_model.py --stage react, "
-          "테스트는 test_model.py --stage react 를 쓰세요.")
+    print(f"[OK] PLAN 완료 — loss: {stats.training_loss:.4f}")
+    print("[i] 병합하려면 export_model.py --stage plan, "
+          "테스트는 test_model.py --stage plan 를 쓰세요.")
 
-    save_adapter(model, tokenizer, stage_cfg["output_dir"], "react")
+    save_adapter(model, tokenizer, stage_cfg["output_dir"], "plan")
 
 
 if __name__ == "__main__":

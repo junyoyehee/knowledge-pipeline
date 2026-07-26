@@ -6,7 +6,9 @@ import re
 
 import yaml
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# scripts/lib/common.py → repo 루트는 세 단계 위
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def load_config(config_path: str = None) -> dict:

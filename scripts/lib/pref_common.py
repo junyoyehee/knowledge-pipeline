@@ -12,7 +12,7 @@ import os
 
 from unsloth import FastLanguageModel
 
-from common import load_config, stage_adapter  # noqa: F401  (재수출)
+from scripts.lib.common import load_config, stage_adapter  # noqa: F401  (재수출)
 
 
 def resolve_init_source(cfg: dict, init_from: str) -> tuple:
@@ -130,7 +130,7 @@ def load_pref_dataset(path: str, required: tuple, label: str):
     if not os.path.exists(path):
         raise SystemExit(
             f"{label} 데이터셋이 없습니다: {path}\n"
-            "scripts/generate_preference.py로 먼저 생성하세요.")
+            "scripts/generate/generate_preference.py로 먼저 생성하세요.")
 
     ds = load_dataset("json", data_files=path, split="train")
     missing = [c for c in required if c not in ds.column_names]

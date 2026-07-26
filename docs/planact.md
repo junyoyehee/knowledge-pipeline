@@ -94,7 +94,7 @@ tool 데이터셋과 **완전히 동일한 스키마**입니다(그래서 학습
 `data/raw/planact_운영.jsonl`에 넣고 `prepare_data.py`를 돌립니다.
 
 ```bash
-python scripts/prepare_data.py
+python -m scripts.data.prepare_data
 # [OK] 계획-실행 데이터셋: N개 궤적 → data/processed/planact_dataset.jsonl
 ```
 
@@ -105,7 +105,7 @@ python scripts/prepare_data.py
 ```bash
 export QA_GEN_BASE_URL="http://localhost:11434/v1"
 export QA_GEN_MODEL="qwen2.5:14b"
-python scripts/generate_planact.py --tools data/raw/tools_catalog.json --per-chunk 1
+python -m scripts.generate.generate_planact --tools data/raw/tools_catalog.json --per-chunk 1
 ```
 
 LLM에게 `{goal, plan, steps, final_answer}` 형식으로 받은 뒤 **`prepare_data.py`와
@@ -119,7 +119,7 @@ LLM에게 `{goal, plan, steps, final_answer}` 형식으로 받은 뒤 **`prepare
 ## 3. 학습
 
 ```bash
-python scripts/train_planact.py
+python -m scripts.train.train_planact
 ```
 
 - 시작 지점은 `config.yaml`의 `planact.init_from`으로 정합니다.
@@ -136,10 +136,10 @@ python scripts/train_planact.py
 ## 4. 테스트 · 병합
 
 ```bash
-python scripts/test_model.py --stage planact          # 함수 스키마를 자동 제공
-python scripts/test_model.py --stage planact -q "코어스톤 위기 대응을 준비해줘"
+python -m scripts.model.test_model --stage planact          # 함수 스키마를 자동 제공
+python -m scripts.model.test_model --stage planact -q "코어스톤 위기 대응을 준비해줘"
 
-python scripts/export_model.py --stage planact
+python -m scripts.model.export_model --stage planact
 ```
 
 > **테스트 유의점:** 실제 도구/환경이 없으므로 모델은 관찰(tool 결과)까지 스스로 지어내며

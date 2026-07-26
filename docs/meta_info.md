@@ -27,8 +27,8 @@
 `meta`는 **모델이 보는 데이터가 아닙니다.** 두 학습 스크립트가 텍스트 컬럼만 남기고
 나머지를 명시적으로 제거합니다:
 
-- [`train_cpt.py`](../scripts/train_cpt.py) — `add_eos` 매핑에서 `text` 외 컬럼 제거
-- [`train_sft.py`](../scripts/train_sft.py) — `remove_columns=dataset.column_names`로 전량 제거 후 `text`만 생성
+- [`train_cpt.py`](../scripts/train/train_cpt.py) — `add_eos` 매핑에서 `text` 외 컬럼 제거
+- [`train_sft.py`](../scripts/train/train_sft.py) — `remove_columns=dataset.column_names`로 전량 제거 후 `text`만 생성
 
 따라서 메타를 추가해도 학습 결과·VRAM·속도에 영향이 없습니다. 메타의 목적은
 **학습이 아니라 데이터 운영**(추적·중복 제거·분할·필터링)입니다.
@@ -128,8 +128,8 @@ PY
 
 ### `origin` — 작성 주체 (SFT 전용)
 
-- `human` — `data/raw/qa_*.jsonl`에 사람이 넣은 QA ([`prepare_data.py`](../scripts/prepare_data.py)가 부여)
-- `llm:<모델명>` — [`generate_qa.py`](../scripts/generate_qa.py)가 자동 생성. 예) `llm:qwen2.5:14b`
+- `human` — `data/raw/qa_*.jsonl`에 사람이 넣은 QA ([`prepare_data.py`](../scripts/data/prepare_data.py)가 부여)
+- `llm:<모델명>` — [`generate_qa.py`](../scripts/generate/generate_qa.py)가 자동 생성. 예) `llm:qwen2.5:14b`
 
 **이 필드가 없으면 생기는 문제:** `generate_qa.py`는 `sft_dataset.jsonl`에 **append**
 합니다. 한 번 섞이고 나면 어느 게 자동 생성분인지 구분할 수 없어, 나중에 생성 품질이
@@ -144,7 +144,7 @@ keep = [l for l in open("data/processed/sft_dataset.jsonl", encoding="utf-8")
         if json.loads(l)["meta"]["origin"] == "human"]
 open("data/processed/sft_dataset.jsonl", "w", encoding="utf-8").writelines(keep)
 PY
-python scripts/generate_qa.py --per-chunk 3   # 새 모델로 재생성
+python -m scripts.generate.generate_qa --per-chunk 3   # 새 모델로 재생성
 ```
 
 **활용 2 — 모델별 품질 비교.** 여러 모델로 생성한 뒤 `origin`별로 나눠 학습·평가하면
