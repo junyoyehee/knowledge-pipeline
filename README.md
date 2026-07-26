@@ -23,11 +23,12 @@ knowledge-pipeline/
 │   ├── meta_info.md          # 데이터셋 meta 필드 의미와 활용법
 │   ├── preference_tuning.md  # DPO/ORPO/KTO 가이드 — 쓰기 전 필독
 │   ├── tool_calling.md       # 툴 호출(function calling) 학습 가이드
-│   └── planning.md           # 계획수립(planning) 학습 가이드
+│   ├── planning.md           # 계획수립(planning) 학습 가이드
+│   └── react.md              # 추론형(ReAct) 학습 가이드
 ├── requirements.txt
 ├── run_pipeline.sh           # 전체 파이프라인 원클릭 실행
 ├── data/
-│   ├── raw/                  # ← 원문(.txt/.md), qa_*.jsonl, tools_*.jsonl, plans_*.jsonl
+│   ├── raw/                  # ← 원문(.txt/.md), qa_/tools_/plans_/react_*.jsonl
 │   └── processed/            # 가공된 학습 데이터 (자동 생성)
 ├── scripts/
 │   ├── common.py             # config 로더, 메타정보 유틸
@@ -40,6 +41,8 @@ knowledge-pipeline/
 │   ├── train_tool.py         # (선택) 툴 호출(function calling) 전용 학습
 │   ├── generate_plans.py     # (선택) LLM으로 계획수립 데이터 자동 생성
 │   ├── train_plan.py         # (선택) 계획수립(planning) 전용 학습
+│   ├── generate_react.py     # (선택) LLM으로 ReAct 트레이스 자동 생성
+│   ├── train_react.py        # (선택) 추론형(ReAct) 전용 학습
 │   ├── export_model.py       # [4] LoRA 병합 (16bit / GGUF)
 │   ├── test_model.py         # [5] 학습 결과 확인
 │   ├── generate_preference.py# (선택) 선호 학습 데이터 생성
@@ -175,6 +178,34 @@ bash run_pipeline.sh --with-plan
 > 데이터 형식·검증 규칙·자동 생성·주의사항은 **[docs/planning.md](docs/planning.md)** 를
 > 참고하세요. 계획을 세운 뒤 실제 도구 실행까지 하려면 툴 호출 학습과 함께 쓰면 됩니다.
 
+### (선택) 추론형 학습 — ReAct
+
+**Thought(생각) → Action(행동) → Observation(관찰)** 을 반복하며 문제를 풀도록
+가르치는 **별도 전용 단계**입니다. `data/raw/react_*.jsonl`에 질문·추론 단계·최종
+답변을 넣으면 멀티턴 트레이스로 변환됩니다(**Observation은 자동 마스킹**되어 학습 대상에서 제외):
+
+```json
+{"question": "5등급 코어스톤은 몇 개이고 어디에 있어?", "steps": [{"thought": "등급 정보를 조회하자.", "action": "lookup_corestone[5]", "observation": "5등급 '심장', 3개, 루멘하임·남부 해구·북부 빙하"}], "final_answer": "심장은 3개이며 루멘하임 대성탑·남부 해구·북부 빙하에 있습니다."}
+```
+
+```bash
+# (선택) LLM으로 ReAct 트레이스 자동 생성
+export QA_GEN_BASE_URL=http://localhost:11434/v1
+export QA_GEN_MODEL=qwen2.5:14b
+python scripts/generate_react.py --per-chunk 2
+
+python scripts/prepare_data.py          # react_*.jsonl → react_dataset.jsonl
+python scripts/train_react.py           # 지식 SFT 위에 추론 능력 추가
+python scripts/test_model.py --stage react
+python scripts/export_model.py --stage react
+
+# 전체 파이프라인에 붙이려면:
+bash run_pipeline.sh --with-react
+```
+
+> 데이터 형식·관찰 마스킹 원리·tool/plan 단계와의 차이·주의사항은
+> **[docs/react.md](docs/react.md)** 를 참고하세요.
+
 ### (선택) 선호 학습 — DPO / ORPO / KTO
 
 SFT 이후 **환각 억제**나 형식 교정이 필요할 때 추가하는 단계입니다.
@@ -206,7 +237,8 @@ python scripts/export_model.py --stage dpo
 | `sft.system_prompt` | 데이터에 system이 없을 때 붙일 기본 system 프롬프트. `null`이면 미사용. 학습·추론에 동일 적용됨 |
 | `tool.init_from` | 툴 호출 학습 시작 지점 (`sft`(권장)/`cpt`/`base`/경로). [docs/tool_calling.md](docs/tool_calling.md) |
 | `plan.init_from` | 계획수립 학습 시작 지점 (`sft`(권장)/`cpt`/`base`/경로). [docs/planning.md](docs/planning.md) |
-| `export.source_stage` | 병합할 단계 (`sft`/`tool`/`plan`/`dpo`/`orpo`/`kto`). 전용 단계를 썼다면 반드시 변경 |
+| `react.init_from` | 추론형(ReAct) 학습 시작 지점 (`sft`(권장)/`tool`/`base`/경로). [docs/react.md](docs/react.md) |
+| `export.source_stage` | 병합할 단계 (`sft`/`tool`/`plan`/`react`/`dpo`/`orpo`/`kto`). 전용 단계를 썼다면 반드시 변경 |
 | `export.save_gguf` | Ollama/llama.cpp용 GGUF 저장 여부 |
 | `preference.*` | 선호 학습 설정. [docs/preference_tuning.md](docs/preference_tuning.md) 참고 |
 

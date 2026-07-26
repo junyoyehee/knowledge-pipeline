@@ -14,6 +14,9 @@
 >
 > 계획수립 데이터셋(`plan_dataset.jsonl`)은 SFT와 같은 메타 필드에 더해 `n_steps`
 > (계획 단계 수)가 붙습니다. 형식은 [planning.md](planning.md) 참고.
+>
+> 추론형 데이터셋(`react_dataset.jsonl`)은 SFT와 같은 메타 필드에 더해 `n_steps`
+> (Thought/Action/Observation 단계 수)가 붙습니다. 형식은 [react.md](react.md) 참고.
 
 ## 전제: 메타는 학습에 들어가지 않습니다
 

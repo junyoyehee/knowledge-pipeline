@@ -16,17 +16,25 @@
         {"question": "...", "answer": "..."} / {"prompt": ..., "response": ...}
     data/raw/tools_*.jsonl        : (선택) 툴 호출 학습 데이터. docs/tool_calling.md
         {"tools": [<함수 스키마>], "messages": [... tool_calls / role:tool ...]}
+    data/raw/react_*.jsonl        : (선택) 추론형(ReAct) 트레이스. docs/react.md
+        {"question": "...", "steps": [{"thought","action","observation"}], "final_answer": "..."}
 
 출력 (각 줄에 meta 필드가 함께 붙습니다 — 의미와 활용법은 docs/meta_info.md):
     data/processed/cpt_dataset.jsonl   : {"text": "...", "meta": {...}}
     data/processed/sft_dataset.jsonl   : {"messages": [...], "meta": {...}}
     data/processed/tool_dataset.jsonl  : {"messages": [...], "tools": "<JSON>", "meta": {...}}
     data/processed/plan_dataset.jsonl  : {"messages": [...], "meta": {"n_steps": N, ...}}
+    data/processed/react_dataset.jsonl : {"messages": [...], "meta": {"n_steps": N, ...}}
 
 계획수립(planning) 입력 형식 (data/raw/plans_*.jsonl):
     {"goal": "목표", "steps": ["1단계", "2단계", ...]}          (권장)
     {"instruction": "목표", "plan": ["..."], "context": "..."}  (alias 자동 인식)
     {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}  (이미 대화형)
+
+추론형(ReAct) 입력 형식 (data/raw/react_*.jsonl):
+    {"question": "...", "steps": [{"thought": "...", "action": "search[...]", "observation": "..."}],
+     "final_answer": "..."}                                    (권장)
+    action은 문자열("tool[input]") 또는 {"tool": "...", "input": ...} 모두 인식
 """
 import argparse
 import glob
@@ -221,6 +229,35 @@ SAMPLE_PLANS = [
          "현장 견학: 루멘하임 대성탑의 5등급 코어스톤 관리 절차를 참관한다",
          "실무 훈련: 마력 수치 측정과 이상 징후 보고 절차를 실습한다",
          "평가: 등급 판별과 비상 대응 시나리오로 이해도를 점검한다"]},
+]
+
+
+# ---------------------------------------------------------------
+# 샘플 추론형(ReAct) 데이터 (react_*.jsonl이 없을 때 파이프라인 검증용으로 생성됨)
+# 실제 사용 시에는 자신의 추론 트레이스를 react_*.jsonl에 넣으세요. 형식은 docs/react.md.
+# ---------------------------------------------------------------
+SAMPLE_REACT = [
+    {"question": "5등급 코어스톤은 몇 개이고 어디에 있어?",
+     "steps": [
+         {"thought": "코어스톤 등급별 정보를 찾아야 한다. 등급 조회로 시작하자.",
+          "action": "lookup_corestone[5]",
+          "observation": "5등급 '심장', 총 3개, 위치: 루멘하임 대성탑·남부 해구·북부 빙하 아래"},
+         {"thought": "개수와 위치를 모두 확인했다. 답할 수 있다.",
+          "action": "finish[]",
+          "observation": "(종료)"}],
+     "final_answer": "5등급 코어스톤 '심장'은 총 3개이며, 루멘하임 대성탑·남부 해구·북부 빙하 아래에 있습니다."},
+    {"question": "1차 낙토 현상이 흑요 상회 결성보다 먼저야?",
+     "steps": [
+         {"thought": "두 사건의 연도를 각각 확인해 비교해야 한다. 먼저 낙토 현상 연도를 찾자.",
+          "action": "list_events[낙토]",
+          "observation": "제국력 847년: 1차 낙토 현상 (동부 카엘라 지방 추락)"},
+         {"thought": "이번엔 흑요 상회 결성 연도를 찾자.",
+          "action": "list_events[흑요 상회]",
+          "observation": "제국력 903년: 흑요 상회 결성"},
+         {"thought": "847년 < 903년이므로 낙토 현상이 먼저다.",
+          "action": "finish[]",
+          "observation": "(종료)"}],
+     "final_answer": "네. 1차 낙토 현상은 제국력 847년, 흑요 상회 결성은 903년이므로 낙토 현상이 56년 먼저 일어났습니다."},
 ]
 
 
@@ -599,6 +636,130 @@ def build_plan_meta(raw: dict, messages: list, n_steps: int,
     return meta
 
 
+# ---------------------------------------------------------------
+# 추론형(ReAct) 데이터 정규화
+#   - question + steps[{thought, action, observation}] + final_answer 를 받아
+#     멀티턴 대화로 변환한다.
+#   - Thought+Action은 assistant 턴, Observation은 user 턴으로 넣어
+#     train_on_responses_only가 Observation을 자동 마스킹하도록 한다.
+#     (모델이 관찰 결과를 지어내도록 학습하는 것을 방지)
+# ---------------------------------------------------------------
+REACT_MIN_STEPS = 1  # 최소 1회의 thought-action-observation이 있어야 ReAct다
+# 트레이스 구조 라벨. 필요하면 이 값만 바꾸면 전체 렌더링이 따라간다.
+REACT_LABELS = {"thought": "Thought", "action": "Action",
+                "observation": "Observation", "final": "Final Answer"}
+
+
+def _action_to_text(action) -> str | None:
+    """action(문자열 또는 {tool,input})을 'tool[input]' 형태 한 줄로 변환."""
+    if isinstance(action, str):
+        return action.strip() or None
+    if isinstance(action, dict):
+        tool = action.get("tool") or action.get("name") or action.get("action")
+        if not isinstance(tool, str) or not tool.strip():
+            return None
+        inp = action.get("input")
+        if inp is None:
+            inp = action.get("args", action.get("query", ""))
+        if isinstance(inp, (dict, list)):
+            inp = json.dumps(inp, ensure_ascii=False)
+        return f"{tool.strip()}[{str(inp).strip()}]"
+    return None
+
+
+def _clean_react_steps(steps_raw) -> list | None:
+    """steps 배열을 (thought, action, observation) 튜플 리스트로 정리."""
+    if not isinstance(steps_raw, list):
+        return None
+    steps = []
+    for s in steps_raw:
+        if not isinstance(s, dict):
+            return None
+        thought = s.get("thought") or s.get("reasoning") or s.get("think")
+        action = _action_to_text(s.get("action") or s.get("act"))
+        obs = s.get("observation")
+        if isinstance(obs, (dict, list)):
+            obs = json.dumps(obs, ensure_ascii=False)
+        if not (isinstance(thought, str) and thought.strip()) or not action:
+            return None
+        if not (isinstance(obs, str) and obs.strip()):
+            return None
+        steps.append((thought.strip(), action, obs.strip()))
+    return steps
+
+
+def normalize_react_sample(item: dict) -> dict | None:
+    """ReAct 샘플을 검증·정규화 → {"messages": [...], "n_steps": N} 또는 None."""
+    if not isinstance(item, dict):
+        return None
+
+    # 1) 이미 messages 형식 (SFT용 검증기 재사용, 단계 수는 Action 개수로 추정)
+    if isinstance(item.get("messages"), list):
+        messages = _clean_messages(item["messages"])
+        if not messages:
+            return None
+        joined = "\n".join(m["content"] for m in messages if m["role"] == "assistant")
+        n = len(re.findall(rf"(?m)^{re.escape(REACT_LABELS['action'])}\s*:",
+                           joined))
+        return {"messages": messages, "n_steps": n}
+
+    # 2) question + steps + final_answer 구조
+    question = (item.get("question") or item.get("instruction")
+               or item.get("task") or item.get("prompt"))
+    final = item.get("final_answer") or item.get("answer") or item.get("final")
+    steps = _clean_react_steps(item.get("steps") or item.get("trajectory")
+                               or item.get("react"))
+    if not (isinstance(question, str) and question.strip()):
+        return None
+    if not (isinstance(final, str) and final.strip()):
+        return None
+    if steps is None or len(steps) < REACT_MIN_STEPS:
+        return None
+
+    user_content = question.strip()
+    ctx = item.get("context") or item.get("input")
+    if isinstance(ctx, str) and ctx.strip():
+        user_content = f"{user_content}\n\n{ctx.strip()}"
+
+    L = REACT_LABELS
+    messages = []
+    system = item.get("system")
+    if isinstance(system, str) and system.strip():
+        messages.append({"role": "system", "content": system.strip()})
+    messages.append({"role": "user", "content": user_content})
+    for thought, action, obs in steps:
+        # assistant: Thought + Action (여기에 loss)
+        messages.append({"role": "assistant",
+                         "content": f"{L['thought']}: {thought}\n{L['action']}: {action}"})
+        # user: Observation (마스킹됨)
+        messages.append({"role": "user", "content": f"{L['observation']}: {obs}"})
+    # 마지막 assistant: (선택) 마무리 Thought + Final Answer
+    final_thought = item.get("final_thought")
+    if isinstance(final_thought, str) and final_thought.strip():
+        final_content = (f"{L['thought']}: {final_thought.strip()}\n"
+                         f"{L['final']}: {final.strip()}")
+    else:
+        final_content = f"{L['final']}: {final.strip()}"
+    messages.append({"role": "assistant", "content": final_content})
+
+    return {"messages": messages, "n_steps": len(steps)}
+
+
+def build_react_meta(raw: dict, messages: list, n_steps: int,
+                     path: str, lineno: int) -> dict:
+    """ReAct 샘플의 메타정보 생성. 입력에 meta가 있으면 그쪽을 우선한다."""
+    incoming = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    meta = {
+        "id": f"{slugify(path)}-{lineno:04d}",
+        "source": os.path.basename(path),
+        "origin": "human",          # 자동 생성분은 generate_react.py가 llm:*로 표기
+        "n_steps": n_steps,
+    }
+    meta.update({k: v for k, v in incoming.items() if v is not None})
+    meta["hash"] = messages_hash(messages)
+    return meta
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
@@ -617,9 +778,10 @@ def main():
     qa_files = sorted(glob.glob(os.path.join(raw_dir, "qa_*.jsonl")))
     tool_files = sorted(glob.glob(os.path.join(raw_dir, "tools_*.jsonl")))
     plan_files = sorted(glob.glob(os.path.join(raw_dir, "plans_*.jsonl")))
+    react_files = sorted(glob.glob(os.path.join(raw_dir, "react_*.jsonl")))
 
-    # 아무것도 없으면 샘플 생성 (원문 + QA + 툴 호출 + 계획수립)
-    if not doc_files and not qa_files and not tool_files and not plan_files:
+    # 아무것도 없으면 샘플 생성 (원문 + QA + 툴 호출 + 계획수립 + ReAct)
+    if not (doc_files or qa_files or tool_files or plan_files or react_files):
         print("[i] data/raw/에 문서가 없어 샘플 데이터를 생성합니다.")
         sample_doc = os.path.join(raw_dir, "sample_worldbook.md")
         with open(sample_doc, "w", encoding="utf-8") as f:
@@ -636,8 +798,12 @@ def main():
         with open(sample_plans, "w", encoding="utf-8") as f:
             for item in SAMPLE_PLANS:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        sample_react = os.path.join(raw_dir, "react_sample.jsonl")
+        with open(sample_react, "w", encoding="utf-8") as f:
+            for item in SAMPLE_REACT:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
         doc_files, qa_files = [sample_doc], [sample_qa]
-        tool_files, plan_files = [sample_tools], [sample_plans]
+        tool_files, plan_files, react_files = [sample_tools], [sample_plans], [sample_react]
 
     # ---------- CPT 데이터셋 생성 ----------
     # meta.id는 SFT 쪽에서 meta.chunk_id로 참조되므로 안정적으로 유지되어야 한다.
@@ -777,6 +943,47 @@ def main():
     elif plan_out:
         print("[i] 계획 파일(plans_*.jsonl)이 없어 plan 단계 데이터는 만들지 "
               "않았습니다. generate_plans.py로 생성하거나 plan 단계를 건너뛰세요.")
+
+    # ---------- 추론형(ReAct) 데이터셋 생성 (선택) ----------
+    react_out = cfg["data"].get("react_dataset")
+    if react_files and react_out:
+        os.makedirs(os.path.dirname(react_out), exist_ok=True)
+        n_react, n_react_skipped = 0, 0
+        with open(react_out, "w", encoding="utf-8") as out:
+            for path in react_files:
+                with open(path, "r", encoding="utf-8") as f:
+                    for lineno, line in enumerate(f, 1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            raw = json.loads(line)
+                        except json.JSONDecodeError:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "JSON 파싱 실패 — 건너뜀")
+                            n_react_skipped += 1
+                            continue
+                        item = normalize_react_sample(raw)
+                        if not item:
+                            print(f"[!] {os.path.basename(path)}:{lineno} "
+                                  "인식할 수 없는 ReAct 형식 — 건너뜀")
+                            n_react_skipped += 1
+                            continue
+                        record = {
+                            "messages": item["messages"],
+                            "meta": build_react_meta(raw, item["messages"],
+                                                     item["n_steps"], path, lineno),
+                        }
+                        out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        n_react += 1
+        if n_react:
+            print(f"[OK] ReAct 데이터셋: {n_react}개 트레이스 → {react_out}"
+                  + (f" ({n_react_skipped}개 건너뜀)" if n_react_skipped else ""))
+        else:
+            print("[!] 유효한 ReAct 샘플이 없습니다. docs/react.md의 형식을 확인하세요.")
+    elif react_out:
+        print("[i] ReAct 파일(react_*.jsonl)이 없어 react 단계 데이터는 만들지 "
+              "않았습니다. generate_react.py로 생성하거나 react 단계를 건너뛰세요.")
 
 
 if __name__ == "__main__":
