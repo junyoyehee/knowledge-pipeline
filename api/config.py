@@ -60,6 +60,29 @@ REMOTE_SSH_OPTS = os.environ.get("KP_REMOTE_SSH_OPTS", "")  # 예: "-p 2222 -i ~
 # 담으므로 원격에서도 같은 경로여야 해석된다). 다른 경로를 쓰려면 이 값을 조정.
 REMOTE_STORAGE_ROOT = os.environ.get("KP_REMOTE_STORAGE_ROOT", str(STORAGE_ROOT))
 
+# ---------- 관리형 스케줄러 (docs/remote_unsloth.md §3 ③) ----------
+# 활성화 시 GPU 잡(train/export/infer)을 SLURM/Kubernetes 등 클러스터에 제출하고
+# API는 제출·상태 폴링·로그 회수만 담당한다. CPU 잡은 항상 로컬 실행.
+# 전제: 클러스터 노드와 API가 공유 스토리지를 동일 절대경로로 본다(#8① 동일).
+SCHEDULER_ENABLED = _env_bool("KP_SCHEDULER_ENABLED", False)
+SCHEDULER_BACKEND = os.environ.get("KP_SCHEDULER_BACKEND", "slurm")  # slurm | k8s
+SCHEDULER_POLL_INTERVAL = float(os.environ.get("KP_SCHEDULER_POLL_INTERVAL", "10"))
+# SLURM
+SLURM_PARTITION = os.environ.get("KP_SLURM_PARTITION")        # 예: gpu
+SLURM_GRES = os.environ.get("KP_SLURM_GRES", "gpu:1")          # 예: gpu:a100:1
+SLURM_EXTRA_SBATCH = os.environ.get("KP_SLURM_EXTRA_SBATCH", "")  # 임의 #SBATCH 옵션
+SLURM_TIME_LIMIT = os.environ.get("KP_SLURM_TIME_LIMIT")      # 예: 24:00:00
+# Kubernetes
+K8S_NAMESPACE = os.environ.get("KP_K8S_NAMESPACE", "default")
+K8S_IMAGE = os.environ.get("KP_K8S_IMAGE")                    # unsloth 포함 학습 이미지
+K8S_GPU_RESOURCE = os.environ.get("KP_K8S_GPU_RESOURCE", "nvidia.com/gpu")
+K8S_GPU_COUNT = os.environ.get("KP_K8S_GPU_COUNT", "1")
+# 공유 스토리지를 파드에 마운트하는 PVC (STORAGE_ROOT 절대경로에 마운트).
+K8S_STORAGE_PVC = os.environ.get("KP_K8S_STORAGE_PVC")
+# 클러스터 노드가 리포를 체크아웃해 둔 경로(작업 디렉터리). 없으면 이미지 WORKDIR.
+SCHEDULER_REMOTE_DIR = os.environ.get("KP_SCHEDULER_REMOTE_DIR")
+SCHEDULER_PYTHON = os.environ.get("KP_SCHEDULER_PYTHON", "python3")
+
 
 def ensure_storage() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
