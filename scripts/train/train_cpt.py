@@ -21,6 +21,7 @@ from unsloth import is_bfloat16_supported
 from datasets import load_dataset
 
 from scripts.lib.common import load_config, add_report_arg, write_report
+from scripts.lib.report import make_progress_callback
 
 
 def main():
@@ -70,6 +71,7 @@ def main():
     print(f"[i] CPT 학습 샘플 수: {len(dataset)}")
 
     # ---------- 학습 ----------
+    _cb = make_progress_callback(args.progress_json)
     trainer = UnslothTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -78,6 +80,7 @@ def main():
         max_seq_length=mcfg["max_seq_length"],
         dataset_num_proc=2,
         packing=True,  # 짧은 청크를 묶어 시퀀스 활용도 향상
+        callbacks=[_cb] if _cb else None,
         args=UnslothTrainingArguments(
             output_dir=ccfg["output_dir"],
             num_train_epochs=tcfg["num_epochs"],

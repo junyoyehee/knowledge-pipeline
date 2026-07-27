@@ -41,6 +41,30 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 | `KP_REMOTE_DIR` | — | 원격 리포 체크아웃 경로 |
 | `KP_REMOTE_PYTHON` | `python3` | 원격 파이썬 |
 | `KP_REMOTE_SSH_OPTS` | — | 추가 ssh 옵션 (예: `-p 2222 -i ~/key`) |
+| `KP_GPU_WORKER_ENABLED` | `true` | 이 프로세스가 GPU 잡 워커를 돌릴지 |
+| `KP_CPU_WORKER_ENABLED` | `true` | 이 프로세스가 CPU 잡 워커를 돌릴지 |
+| `KP_WORKER_ID` | 호스트명 | 잡 클레임 워커 식별자 |
+| `KP_SCHEDULER_ENABLED` | `false` | GPU 잡을 관리형 스케줄러에 제출(#8③) |
+| `KP_SCHEDULER_BACKEND` | `slurm` | `slurm` \| `k8s` |
+| `KP_SCHEDULER_POLL_INTERVAL` | `10` | 상태 폴링 주기(초) |
+| `KP_SCHEDULER_REMOTE_DIR` | — | 노드의 리포 체크아웃 경로(작업 디렉터리) |
+| `KP_SLURM_PARTITION` / `KP_SLURM_GRES` | — / `gpu:1` | SLURM 파티션·GPU 자원 |
+| `KP_K8S_IMAGE` / `KP_K8S_STORAGE_PVC` | — | K8s 학습 이미지·공유 PVC |
+
+### 원격 GPU 워커 (분리 배치, #8①)
+
+API 호스트에 GPU/unsloth 없이, **GPU 호스트를 상주 워커**로 두어 공유 스토리지의
+큐를 직접 소비하게 할 수 있습니다. `store`의 잡 클레임은 멀티프로세스 안전합니다.
+
+```bash
+# 공유 스토리지(NFS 등)를 두 호스트가 같은 절대경로로 마운트
+# API 호스트 — CPU 잡만, GPU 잡은 큐에 위임
+KP_STORAGE_ROOT=/mnt/shared/kp KP_GPU_WORKER_ENABLED=false uvicorn api.main:app --port 8000
+# GPU 호스트 — unsloth 설치, 같은 스토리지, GPU 워커만 상주
+KP_STORAGE_ROOT=/mnt/shared/kp python -m api.worker --role gpu
+```
+
+②(SSH 러너)와의 차이·확장(Redis)은 [../docs/remote_unsloth.md](../docs/remote_unsloth.md) §3 참고.
 
 ### 원격 unsloth(GPU) 실행 (SSH 러너, PoC)
 
@@ -60,6 +84,28 @@ uvicorn api.main:app --port 8000
 `python -m scripts.<group>.<name> --config <경로>` 실행(로그 스트리밍) → ③ 성공 시
 원격 `outputs/`를 로컬로 회수. 전제: 원격에 리포 체크아웃+unsloth, 로컬에 ssh/rsync,
 스토리지 절대경로를 원격에서도 동일하게 접근 가능(기본은 동일 경로 미러링).
+
+### 관리형 스케줄러 (SLURM · Kubernetes, #8③)
+
+이미 SLURM/K8s 클러스터가 있으면 GPU 잡을 클러스터에 **제출하고 상태만 폴링**할 수
+있습니다(공유 스토리지 전제 — 노드와 API가 동일 절대경로 접근). CPU 잡은 항상 로컬.
+
+```bash
+# SLURM
+KP_SCHEDULER_ENABLED=1 KP_SCHEDULER_BACKEND=slurm \
+  KP_SLURM_PARTITION=gpu KP_SLURM_GRES=gpu:a100:1 \
+  KP_SCHEDULER_REMOTE_DIR=/opt/knowledge-pipeline \
+  KP_STORAGE_ROOT=/mnt/shared/kp uvicorn api.main:app --port 8000
+# Kubernetes
+KP_SCHEDULER_ENABLED=1 KP_SCHEDULER_BACKEND=k8s \
+  KP_K8S_IMAGE=registry/kp:latest KP_K8S_STORAGE_PVC=kp-shared \
+  KP_STORAGE_ROOT=/mnt/shared/kp uvicorn api.main:app --port 8000
+```
+
+동작: `submit`(sbatch/`kubectl apply`) → `poll`(squeue·sacct/`kubectl get job`)로 상태
+확인 → 공유 스토리지의 `progress.json`을 잡 진행률에, 완료 시 `report.json`을 결과에
+반영. 취소는 `scancel`/`kubectl delete job`. 설계·한계는
+[../docs/remote_unsloth.md](../docs/remote_unsloth.md) §3③.
 
 ## 빠른 예시
 
@@ -99,6 +145,19 @@ curl -s -XPOST $B/projects/$PID/train -H "$H" \
 | 잡 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/logs?follow=true`(SSE), `POST /v1/jobs/{id}:cancel` |
 | 메타 | `GET /v1/healthz`, `GET /v1/config/schema` |
 
+### 실시간 학습 진행률 (#9)
+
+학습 잡은 스텝 단위 진행률을 실시간으로 노출한다.
+
+- 학습 스크립트가 `--progress-json <path>` 로 받은 경로에 TrainerCallback이 매 로그마다
+  `{step, total_steps, pct, loss, lr, epoch}` 를 원자적으로 기록한다.
+- 러너가 이 파일을 폴링해 잡의 `progress` 필드에 반영하고, `GET /v1/jobs/{id}` 응답과
+  `logs?follow=true` SSE 스트림의 `event: progress` 로 흘려보낸다.
+- `GET /v1/jobs/{id}` 를 폴링해도 되고, SSE에서 `log`(로그 한 줄) · `progress`(진행률) ·
+  `status`(종료) 세 종류 이벤트를 함께 구독해도 된다.
+- 원격 GPU 워커(#8①)는 워커가 로컬 진행률 파일을 공유 DB에 반영하므로 그대로 노출되고,
+  SSH 러너(#8②)는 원격 파일을 폴링할 수 없어 최종 리포트만 회수된다.
+
 ## 구조
 
 ```
@@ -110,24 +169,36 @@ api/
 ├── storage.py         # 프로젝트 스토리지 레이아웃
 ├── secrets.py         # 시크릿 암호화(Fernet, 폴백 포함)
 ├── config_builder.py  # 요청→config.yaml(경로 주입 + override 화이트리스트)
-├── runner.py          # 잡→서브프로세스 실행·로그·메트릭·취소
+├── runner.py          # 잡→로컬/SSH/스케줄러 실행·로그·메트릭·진행률·취소
+├── remote.py          # 원격 SSH 러너(#8②) — rsync 푸시/풀 + ssh 실행
+├── scheduler.py       # 관리형 스케줄러(#8③) — SLURM/K8s 제출·폴링·취소
 ├── worker.py          # GPU/CPU 워커 스레드
 ├── schemas.py         # 요청/응답 모델
 ├── routers/           # projects · pipeline · jobs
-└── tests/test_e2e.py  # GPU 불필요 스모크 테스트
+└── tests/            # GPU 불필요 스모크/단위 테스트
+    ├── test_e2e.py       # 프로젝트→업로드→prepare(잡)→데이터셋 E2E
+    ├── test_remote.py    # 원격 SSH 러너(#8②) 분기
+    ├── test_worker.py    # 멀티프로세스 큐 + 역할 게이팅(#8①)
+    ├── test_progress.py  # 실시간 진행률 + SSE progress 이벤트(#9)
+    └── test_scheduler.py # 관리형 스케줄러(#8③) 상태 매핑·제출/폴링/취소
 ```
 
 ## 테스트
 
 ```bash
-PYTHONPATH=. python3 -m api.tests.test_e2e
-# 프로젝트→업로드→prepare(실제 서브프로세스)→데이터셋→가드까지 검증(GPU 불필요)
+PYTHONPATH=. python3 -m api.tests.test_e2e        # E2E(실제 prepare 서브프로세스)
+PYTHONPATH=. python3 -m api.tests.test_remote     # SSH 러너(#8②) 분기
+PYTHONPATH=. python3 -m api.tests.test_worker     # 멀티프로세스 큐 + 역할 게이팅(#8①)
+PYTHONPATH=. python3 -m api.tests.test_progress   # 실시간 진행률 + SSE(#9)
+PYTHONPATH=. python3 -m api.tests.test_scheduler  # 관리형 스케줄러(#8③)
+# 모두 GPU 불필요. 원격/스케줄러/GPU 실행 경로는 목킹으로 검증(실 클러스터 미검증).
 ```
 
 ## 한계 / 다음 단계 (Phase 2+)
 
 - 상시 저지연 서빙(vLLM Deployment)은 미포함 — 현재 추론은 잡 기반 간이 테스트.
-- 스케일아웃(Celery/RQ, 다중 GPU, S3), 멀티테넌시/쿼터, 웹 콘솔은 이후 단계.
-- 최종 메트릭은 스크립트가 남기는 `--report-json`(잡별 `report.json`)에서 수집합니다
-  (stdout 파싱은 폴백). **실시간 step 단위 진행률**은 아직 stdout 파싱이며, TrainerCallback
-  기반 정밀 진행률은 후속 작업입니다.
+- 스케일아웃(Celery/RQ 등 Redis 큐, S3), 멀티테넌시/쿼터, 웹 콘솔은 이후 단계.
+- 최종 메트릭은 `--report-json`(잡별 `report.json`), 실시간 진행률은 `--progress-json`
+  (#9)에서 수집합니다(stdout 파싱은 폴백).
+- 원격 실행은 SSH 러너(#8②)·원격 GPU 워커(#8①)·관리형 스케줄러(#8③, SLURM/K8s)를
+  지원합니다. 클러스터 CLI 연동 실행 경로는 실제 클러스터가 없어 미검증(목킹 검증).

@@ -302,7 +302,8 @@ Job 객체(공통):
 ```
 - 선행 조건 검증: `sft(continue_from_cpt)`→cpt 어댑터, `dpo/planact(init_from)`→해당 어댑터 존재.
   없으면 `409 conflict`.
-- 진행률: stdout의 `loss`/step 로그를 파싱해 `progress`에 반영. 완료 시 `result.metrics.train_loss`.
+- 진행률: 학습 콜백이 남긴 `--progress-json`(step/total_steps/pct/loss/lr/epoch)을 러너가
+  폴링해 `progress`에 반영(stdout 파싱은 폴백). 완료 시 `result.metrics.train_loss`. ✅ #9
 - 산출물: `outputs/{stage}/final` 어댑터가 Adapter 리소스로 등록.
 - GPU 큐에서 직렬 실행. 큐 한도 초과 시 즉시 `202`(queued)로 대기.
 
@@ -346,14 +347,20 @@ Job 객체(공통):
 
 **`GET /v1/jobs/{job_id}/logs?follow=true`**
 - `follow=false`: 현재까지의 로그 텍스트.
-- `follow=true`: **SSE 스트림**(`text/event-stream`)으로 실시간 로그 라인 전송.
+- `follow=true`: **SSE 스트림**(`text/event-stream`)으로 실시간 로그·진행률 전송.
   ```
   event: log
-  data: {"ts":"...","line":"[i] SFT 학습 샘플 수: 152"}
+  data: {"line":"[i] SFT 학습 샘플 수: 152"}
+
+  event: progress
+  data: {"step":120,"total_steps":400,"pct":30.0,"loss":1.83,"lr":9.2e-05,"epoch":0.6}
 
   event: status
   data: {"status":"succeeded"}
   ```
+  - `progress` 이벤트는 학습 스크립트의 TrainerCallback이 남긴 진행률(`--progress-json`)을
+    러너가 폴링해 방출한다. 스트림을 쓰지 않으면 `GET /v1/jobs/{id}` 의 `progress` 필드를
+    폴링해도 동일한 값을 얻는다. ✅ 구현 완료(#9).
 
 **`POST /v1/jobs/{job_id}:cancel`** → 서브프로세스에 `SIGTERM`, 상태 `canceled`.
 **`GET /v1/projects/{pid}/jobs?status=&type=`** → 잡 목록(필터·페이지네이션).
@@ -410,6 +417,10 @@ Job 객체(공통):
   기록하며(`scripts/lib/common.py`의 `add_report_arg`/`write_report`), API 러너가
   잡별 `report.json`을 읽어 `result`를 구성한다(리포트 우선, 없으면 stdout 폴백).
   원격 실행 시 리포트도 함께 회수한다.
+- ✅ **실시간 진행률 (`--progress-json`, #9)**: 학습 스크립트의 TrainerCallback이
+  스텝 단위 진행률(step/total_steps/pct/loss/lr/epoch)을 파일에 원자적으로 기록하고
+  (`scripts/lib/report.py`), 러너가 폴링해 잡 `progress`에 반영한다. SSE
+  `logs?follow=true` 스트림의 `event: progress` 또는 `GET /v1/jobs/{id}` 폴링으로 노출.
 
 ---
 

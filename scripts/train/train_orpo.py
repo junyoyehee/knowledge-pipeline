@@ -22,6 +22,7 @@ import os
 from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
 from scripts.lib.common import add_report_arg, write_report
+from scripts.lib.report import make_progress_callback
 
 from unsloth import is_bfloat16_supported
 
@@ -46,8 +47,10 @@ def main():
         label="ORPO")
     warn_if_too_small(len(dataset), "ORPO")
 
+    _cb = make_progress_callback(args.progress_json)
     trainer = ORPOTrainer(
         model=model,          # reference 모델 없음 — ORPO의 핵심 장점
+        callbacks=[_cb] if _cb else None,
         train_dataset=dataset,
         args=ORPOConfig(
             output_dir=stage_cfg["output_dir"],

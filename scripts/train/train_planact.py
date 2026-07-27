@@ -43,7 +43,8 @@ def main():
             "generate_planact.py로 먼저 생성하세요.")
 
     train_tool_style(cfg, cfg["planact"], planact_path, "planact",
-                     report_path=args.report_json)
+                     report_path=args.report_json,
+                     progress_path=args.progress_json)
 
 
 if __name__ == "__main__":

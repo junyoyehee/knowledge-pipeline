@@ -19,6 +19,7 @@ import os
 from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
 from scripts.lib.common import add_report_arg, write_report
+from scripts.lib.report import make_progress_callback
 
 from unsloth import is_bfloat16_supported
 
@@ -68,9 +69,11 @@ def main():
     warn_if_too_small(len(dataset), "KTO", minimum=400)  # 쌍이 분해되므로 2배
     check_balance(dataset, tcfg["desirable_weight"], tcfg["undesirable_weight"])
 
+    _cb = make_progress_callback(args.progress_json)
     trainer = KTOTrainer(
         model=model,
         ref_model=None,   # PEFT 모델이므로 어댑터를 끈 상태가 reference
+        callbacks=[_cb] if _cb else None,
         train_dataset=dataset,
         args=KTOConfig(
             output_dir=stage_cfg["output_dir"],

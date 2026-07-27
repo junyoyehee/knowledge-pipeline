@@ -8,8 +8,10 @@ import re
 import signal
 import subprocess
 import threading
+import time
 
-from . import config, config_builder, remote, secrets, storage, store
+from . import (config, config_builder, remote, scheduler, secrets, storage,
+               store)
 
 # 실행 중인 잡의 Popen 핸들 (취소용)
 _procs: dict[str, subprocess.Popen] = {}
@@ -93,8 +95,12 @@ def run_job(job: dict) -> None:
         module, *extra = _script_for(job)
         # 구조화 메트릭 리포트 경로 (stdout 파싱 대신 이 파일에서 결과 수집)
         report_path = jdir / "report.json"
-        extra = [*extra, "--report-json", str(report_path)]
+        # 실시간 진행률 파일 경로 (학습 스크립트의 TrainerCallback이 주기적으로 기록)
+        progress_path = jdir / "progress.json"
+        extra = [*extra, "--report-json", str(report_path),
+                 "--progress-json", str(progress_path)]
         remote_mode = remote.enabled_for(job["type"])
+        sched_mode = scheduler.enabled_for(job["type"])
 
         # 3) 환경변수 (generate 잡은 LLM 시크릿 주입; 원격 GPU 잡은 불필요)
         env = os.environ.copy()
@@ -105,7 +111,10 @@ def run_job(job: dict) -> None:
             env["QA_GEN_MODEL"] = llm.get("model", sec.get("QA_GEN_MODEL", ""))
             env["QA_GEN_API_KEY"] = llm.get("api_key", sec.get("QA_GEN_API_KEY", "dummy"))
 
-        if remote_mode:
+        if sched_mode:
+            # 클러스터 제출-폴링 경로(§3③). 서브프로세스 스트리밍을 쓰지 않는다.
+            cmd = cwd = None
+        elif remote_mode:
             # 입력 데이터·config·기존 어댑터를 원격으로 푸시 후 SSH 실행 커맨드 구성
             remote.push_project(pid)
             cmd = remote.build_cmd(module, extra, cfg_path)
@@ -118,6 +127,12 @@ def run_job(job: dict) -> None:
         store.update_job(jid, status="failed", error=f"구성 실패: {e}",
                          finished_at=store.now())
         _notify(job)
+        return
+
+    # 스케줄러 모드: 제출→폴링 경로로 위임하고 종료
+    if sched_mode:
+        _run_via_scheduler(job, module, extra, cfg_path, log_path,
+                           report_path, progress_path)
         return
 
     # 4) 서브프로세스 실행 + 로그 스트리밍 + 메트릭 파싱
@@ -146,6 +161,12 @@ def run_job(job: dict) -> None:
                 if sm:
                     progress["step"] = int(sm.group(1))
                     progress["total"] = int(sm.group(2))
+                # 학습 콜백이 남긴 진행률 파일을 우선 반영 (step/loss/lr/epoch/pct).
+                # 원격 SSH 실행은 파일이 원격에 있어 폴링 불가(최종 리포트만 회수).
+                if not remote_mode:
+                    fp = _read_progress(progress_path)
+                    if fp:
+                        progress.update(fp)
                 if progress:
                     store.update_job(jid, progress=progress)
             rc = proc.wait()
@@ -181,8 +202,87 @@ def run_job(job: dict) -> None:
     _notify(store.get_job(jid))
 
 
+def _run_via_scheduler(job, module, extra, cfg_path, log_path,
+                       report_path, progress_path) -> None:
+    """GPU 잡을 클러스터에 제출하고 상태를 폴링한다 (docs/remote_unsloth.md §3③).
+
+    공유 스토리지 전제(#8① 동일): 잡이 쓰는 log/report/progress 파일을 API가
+    같은 절대경로에서 읽는다. 러너 스레드에서 동기로 폴링한다.
+    """
+    jid, pid = job["id"], job["project_id"]
+    try:
+        backend = scheduler.get_backend()
+        # GPU 잡(train/export/infer)만 스케줄되므로 generate 시크릿은 불필요.
+        # 클러스터 노드는 자체 환경을 사용한다(호스트 env 유출 방지).
+        extid = backend.submit(job, module, extra, cfg_path, {}, log_path)
+    except Exception as e:  # noqa: BLE001
+        store.update_job(jid, status="failed",
+                         error=f"스케줄러 제출 실패: {e}", finished_at=store.now())
+        _notify(store.get_job(jid))
+        return
+
+    sched_meta = {"backend": backend.name, "id": extid}
+    store.update_job(jid, progress={"scheduler": sched_meta})
+
+    state = scheduler.PENDING
+    while True:
+        cur = store.get_job(jid)
+        if cur and cur["status"] == "canceled":   # 외부에서 취소 요청됨
+            try:
+                backend.cancel(extid)
+            except Exception:  # noqa: BLE001
+                pass
+            _notify(cur)
+            return
+        try:
+            state = backend.poll(extid)
+            backend.stream_logs(extid, log_path)      # best-effort
+        except Exception as e:  # noqa: BLE001  (일시적 CLI 오류는 계속 폴링)
+            _append_log(log_path, f"[scheduler] 폴링 오류: {e}\n")
+        prog = {"scheduler": sched_meta}
+        fp = _read_progress(progress_path)            # 공유 스토리지의 진행률
+        if fp:
+            prog.update(fp)
+        store.update_job(jid, progress=prog)
+        if state in (scheduler.SUCCEEDED, scheduler.FAILED):
+            break
+        time.sleep(config.SCHEDULER_POLL_INTERVAL)
+
+    if state == scheduler.SUCCEEDED:
+        report = _read_report(report_path)
+        store.update_job(jid, status="succeeded",
+                         result=_collect_result(job, None, report),
+                         finished_at=store.now())
+    else:
+        tail = _log_tail(log_path)
+        store.update_job(jid, status="failed",
+                         error=f"스케줄러 잡 실패 ({backend.name}:{extid})\n{tail}",
+                         finished_at=store.now())
+    _notify(store.get_job(jid))
+
+
+def _append_log(path, text: str) -> None:
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        pass
+
+
 def _read_report(path) -> dict | None:
     """스크립트가 남긴 구조화 리포트(JSON)를 읽는다. 없거나 손상 시 None."""
+    try:
+        import json
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _read_progress(path) -> dict | None:
+    """학습 콜백이 남긴 진행률 파일을 읽는다. 없거나 기록 중(손상)이면 None.
+
+    write_progress가 tmp→replace로 원자적으로 갈아끼우므로 부분 읽기는 없다.
+    """
     try:
         import json
         return json.loads(path.read_text(encoding="utf-8"))
@@ -243,9 +343,21 @@ def cancel(jid: str) -> bool:
         except ProcessLookupError:
             pass
         return True
-    # 아직 실행 전이면 상태만 변경
     job = store.get_job(jid)
-    if job and job["status"] == "queued":
+    if not job:
+        return False
+    # 스케줄러 제출 잡: 로컬 프로세스가 없으므로 외부 잡을 취소한다.
+    # (폴링 루프도 canceled 상태를 감지해 재차 취소하지만, 즉시성을 위해 여기서도.)
+    sched = (job.get("progress") or {}).get("scheduler")
+    if job["status"] == "running" and sched:
+        store.update_job(jid, status="canceled", finished_at=store.now())
+        try:
+            scheduler.get_backend().cancel(sched["id"])
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    # 아직 실행 전이면 상태만 변경
+    if job["status"] == "queued":
         store.update_job(jid, status="canceled", finished_at=store.now())
         return True
     return False

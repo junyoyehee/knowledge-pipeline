@@ -44,24 +44,40 @@ unsloth(+CUDA)는 **GPU가 있는 호스트에서만** 실행됩니다. 따라�
 
 ## 3. 상황 A — 학습 머신이 원격일 때: 3가지 방식
 
-### ① 원격 GPU 워커 (권장)
+### ① 원격 GPU 워커 (권장) — ✅ 구현됨 (공유 스토리지 큐)
 
 ```
-[API + 큐 + 메타DB]           (공유 큐: Redis/DB)          [원격 GPU 호스트]
-  GPU 불필요        ────────────────────────────────►   unsloth 워커 프로세스
-  prepare/generate 로컬 처리                              GPU 잡을 pull → python -m scripts.train.* 실행
-         └───────────────── 공유 스토리지 (NFS / S3) ─────────────────┘
+[API 호스트: CPU 워커만]        (공유 스토리지 위 kp.db 큐)      [GPU 호스트: GPU 워커]
+  KP_GPU_WORKER_ENABLED=false  ────────────────────────────►  python -m api.worker --role gpu
+  prepare/generate 로컬 처리                                    GPU 잡 claim → python -m scripts.* 로컬 실행
+         └───────────────── 공유 스토리지 (NFS 등, 동일 절대경로) ─────────────────┘
 ```
 
-- **GPU 워커를 원격 unsloth 호스트에서 구동**하고 공유 큐에서 GPU 잡을 pull → 그 호스트
-  로컬에서 스크립트 실행. API 호스트에는 unsloth를 설치하지 않음.
-- 필요한 인프라: **공유 큐**(Celery/RQ + Redis) + **공유 스토리지**(데이터셋·어댑터
-  경로를 API·워커 양쪽에서 접근).
-- **현재 코드와의 연결:** `api/worker.py`의 GPU 워커 루프를 원격 호스트에서 실행되는
-  별도 프로세스로 분리하고, `store.py`의 DB 큐를 Redis 큐로 교체하면 그대로 확장됩니다
-  (`runner.run_job`은 재사용 — 원격 호스트 로컬 subprocess 실행).
-- 장점: MVP 재사용도 높고 확장성 우수(다중 GPU 노드로 워커 수평 확장). 단점: 큐·공유
-  스토리지 인프라 필요.
+- **GPU 워커를 GPU 호스트에서 별도 프로세스로 구동**하고 공유 큐에서 GPU 잡을 claim →
+  그 호스트 로컬에서 스크립트 실행. API 호스트엔 unsloth 불필요.
+- **구현:**
+  - `store.claim_next_job` — WAL + `UPDATE ... WHERE status='queued'` rowcount 판정으로
+    **멀티프로세스 원자적 클레임**(두 호스트가 같은 잡을 이중 클레임하지 않음).
+  - `api/worker.py` — 역할 게이팅(`--role gpu|cpu|both`)과 독립 실행 진입점.
+  - `runner.run_job` 재사용 — GPU 호스트에서는 `REMOTE_ENABLED` 없이 **로컬 실행**.
+- **실행 방법:**
+  ```bash
+  # (공유) NFS 등으로 두 호스트가 같은 절대경로의 스토리지를 공유하도록 마운트
+  # API 호스트 — CPU 잡만, GPU 잡은 큐에 쌓아 원격 워커에 위임
+  KP_STORAGE_ROOT=/mnt/shared/kp KP_GPU_WORKER_ENABLED=false \
+    uvicorn api.main:app --port 8000
+  # GPU 호스트 — unsloth 설치, 같은 스토리지, GPU 워커만
+  KP_STORAGE_ROOT=/mnt/shared/kp python -m api.worker --role gpu
+  ```
+- 필요한 인프라: **공유 스토리지**(데이터셋·어댑터·`kp.db`를 두 호스트가 동일 절대경로로 접근).
+- **확장(Phase 3):** 다중 GPU 노드·고빈도에서는 `store`의 SQLite 큐를 **Redis/Celery**로
+  교체(공유 스토리지 SQLite는 단일 파일 락 경합 한계). 워커/러너 구조는 그대로 재사용.
+- 장점: MVP 재사용도 높고 API 호스트에 GPU/unsloth 불필요. 단점: 공유 스토리지 필요,
+  SQLite 큐는 소~중 규모까지.
+
+> **② SSH 러너와의 차이:** ②는 API 호스트가 매 잡마다 SSH로 원격에 밀어넣고 rsync로
+> 데이터를 옮긴다(단일 GPU, 인프라 최소). ①은 GPU 호스트가 **상주 워커**로 큐를
+> 직접 소비한다(공유 스토리지 전제, 다중 워커 확장 용이).
 
 ### ② SSH 원격 실행 (가장 빠른 시작 · PoC) — ✅ 구현됨
 
@@ -79,21 +95,59 @@ API 호스트: 잡별 config + 데이터셋 → rsync 푸시 → SSH로 `python 
 - **한계(PoC):** 취소는 로컬 ssh 프로세스를 종료하며 원격 프로세스가 잠시 잔존할 수 있음.
   스토리지는 rsync 전송(공유 마운트 아님) — 대용량/다중 노드는 ①(공유 스토리지)로 승격.
 
-### ③ 관리형 스케줄러 (이미 클러스터가 있을 때)
+### ③ 관리형 스케줄러 (이미 클러스터가 있을 때) — ✅ 구현됨 (SLURM · Kubernetes)
 
-- SLURM / Kubernetes Job / Ray / SkyPilot 등에 학습 잡을 제출하고 API는 제출·상태
-  폴링만 담당.
-- 장점: 다중 GPU·재시도·스케줄링을 인프라가 담당. 단점: 러닝커브·의존성.
+```
+[API 호스트]                           [클러스터]
+  GPU 잡 → scheduler.submit() ──제출──► SLURM(sbatch) / K8s(Job)
+  poll() 로 상태 확인 ◄──상태 폴링──── squeue·sacct / kubectl get job
+         └──── 공유 스토리지(동일 절대경로: config·데이터·outputs·report·progress) ────┘
+```
+
+- **제출-폴링 모델:** ①/②처럼 서브프로세스를 스트리밍하지 않고, 잡을 클러스터에
+  **제출(submit)** 한 뒤 **상태만 폴링(poll)** 한다. 실제 실행은 클러스터 노드가 담당.
+- **구현:**
+  - `api/scheduler.py` — 백엔드 추상화(`submit`/`poll`/`cancel`/`stream_logs`).
+    - **SLURM**: `build_sbatch_script`로 `#SBATCH`(partition/gres/time/추가옵션 +
+      `--output=<공유 log>`) 스크립트를 만들어 `sbatch --parsable`로 제출, `squeue`→
+      없으면 `sacct`로 최종 상태 확인, `scancel`로 취소.
+    - **Kubernetes**: `build_k8s_manifest`로 Job 매니페스트(이미지·GPU 리소스·
+      공유 PVC 마운트를 `STORAGE_ROOT` 절대경로에)를 만들어 `kubectl apply`, `.status`
+      (succeeded/failed/active)로 상태 판정, `kubectl delete job`로 취소.
+    - 상태 매핑(`map_slurm_state`/`map_k8s_status`)과 스크립트/매니페스트 생성은
+      순수 함수라 클러스터 없이 단위 테스트(`api/tests/test_scheduler.py`).
+  - `runner._run_via_scheduler` — GPU 잡일 때 제출→폴링 루프로 위임. 공유 스토리지의
+    `progress.json`을 잡 `progress`에 반영(#9와 동일 규약), 종료 시 `report.json`으로
+    결과 수집. 취소는 폴링 루프와 `runner.cancel` 양쪽에서 외부 잡을 취소.
+- **활성화:**
+  ```bash
+  # SLURM (로그인 노드에서 API 구동, 공유 파일시스템 전제)
+  KP_SCHEDULER_ENABLED=1 KP_SCHEDULER_BACKEND=slurm \
+    KP_SLURM_PARTITION=gpu KP_SLURM_GRES=gpu:a100:1 \
+    KP_SCHEDULER_REMOTE_DIR=/opt/knowledge-pipeline \
+    KP_STORAGE_ROOT=/mnt/shared/kp uvicorn api.main:app --port 8000
+  # Kubernetes (kubectl 컨텍스트 구성 + 공유 PVC)
+  KP_SCHEDULER_ENABLED=1 KP_SCHEDULER_BACKEND=k8s \
+    KP_K8S_IMAGE=registry/kp:latest KP_K8S_STORAGE_PVC=kp-shared \
+    KP_K8S_GPU_COUNT=1 KP_STORAGE_ROOT=/mnt/shared/kp uvicorn api.main:app
+  ```
+- 필요한 인프라: **공유 스토리지**(①과 동일 — 노드와 API가 동일 절대경로로 접근) +
+  스케줄러 CLI(`sbatch`/`squeue`/`sacct`/`scancel` 또는 `kubectl`).
+- 장점: 다중 GPU·재시도·스케줄링을 인프라가 담당. 단점: 러닝커브·클러스터 의존성.
+- **한계(미검증):** 이 저장소 환경엔 클러스터가 없어 **CLI 연동 실행은 미검증**이다.
+  순수 로직·러너 제출/폴링/취소 분기는 목킹으로 검증됨. Ray/SkyPilot 백엔드는
+  동일한 `submit/poll/cancel` 인터페이스로 추가 가능.
 
 ### 비교
 
-| 기준 | ① 원격 워커 | ② SSH | ③ 스케줄러 |
+| 기준 | ① 원격 워커 ✅ | ② SSH ✅ | ③ 스케줄러 ✅ |
 |---|---|---|---|
 | 도입 속도 | 중 | **빠름** | 느림 |
-| 확장성(다중 GPU) | **좋음** | 나쁨 | **좋음** |
-| 인프라 요구 | 큐+공유스토리지 | SSH만 | 클러스터 |
+| 확장성(다중 GPU) | **좋음**(Redis 전환 시) | 나쁨 | **좋음** |
+| 인프라 요구 | 공유 스토리지 | SSH만 | 클러스터 + 공유 스토리지 |
 | MVP 코드 재사용 | 높음 | **매우 높음** | 중 |
 | 권장 용도 | 운영·확장 | PoC·단일 GPU | 기존 클러스터 |
+| 상태 | 구현됨(SQLite 큐) | 구현됨 | 구현됨(SLURM·K8s, CLI 실행 미검증) |
 
 ---
 
@@ -125,9 +179,10 @@ API 호스트: 잡별 config + 데이터셋 → rsync 푸시 → SSH로 `python 
 
 ## 6. 권장 로드맵
 
-1. **PoC:** ② SSH 러너로 단일 원격 GPU에 학습 위임(빠른 검증).
-2. **운영:** ① 원격 GPU 워커 + Redis 큐 + 공유 스토리지로 전환(api_design §11 Phase 3).
-3. **서빙 분리:** 필요 시 Phase 2 vLLM Deployment로 추론을 원격 엔드포인트화.
+1. **PoC:** ② SSH 러너로 단일 원격 GPU에 학습 위임(빠른 검증). ✅
+2. **운영:** ① 원격 GPU 워커 + Redis 큐 + 공유 스토리지로 전환(api_design §11 Phase 3). ✅(①, 큐 Redis 전환은 잔여)
+3. **클러스터:** 이미 SLURM/K8s가 있으면 ③ 관리형 스케줄러로 제출-폴링. ✅
+4. **서빙 분리:** 필요 시 Phase 2 vLLM Deployment로 추론을 원격 엔드포인트화.
 
 ---
 
