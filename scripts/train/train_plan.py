@@ -30,6 +30,7 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 
 from scripts.lib.common import TEMPLATE_PARTS, add_report_arg, write_report
+from scripts.lib.report import make_progress_callback
 
 
 def main():
@@ -71,6 +72,7 @@ def main():
     print(f"[i] PLAN 학습 샘플 수: {len(dataset)}")
 
     # ---------- 학습 ----------
+    _cb = make_progress_callback(args.progress_json)
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -79,6 +81,7 @@ def main():
         max_seq_length=mcfg["max_seq_length"],
         dataset_num_proc=2,
         packing=False,
+        callbacks=[_cb] if _cb else None,
         args=TrainingArguments(
             output_dir=stage_cfg["output_dir"],
             num_train_epochs=tcfg["num_epochs"],

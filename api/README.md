@@ -117,6 +117,19 @@ curl -s -XPOST $B/projects/$PID/train -H "$H" \
 | 잡 | `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/logs?follow=true`(SSE), `POST /v1/jobs/{id}:cancel` |
 | 메타 | `GET /v1/healthz`, `GET /v1/config/schema` |
 
+### 실시간 학습 진행률 (#9)
+
+학습 잡은 스텝 단위 진행률을 실시간으로 노출한다.
+
+- 학습 스크립트가 `--progress-json <path>` 로 받은 경로에 TrainerCallback이 매 로그마다
+  `{step, total_steps, pct, loss, lr, epoch}` 를 원자적으로 기록한다.
+- 러너가 이 파일을 폴링해 잡의 `progress` 필드에 반영하고, `GET /v1/jobs/{id}` 응답과
+  `logs?follow=true` SSE 스트림의 `event: progress` 로 흘려보낸다.
+- `GET /v1/jobs/{id}` 를 폴링해도 되고, SSE에서 `log`(로그 한 줄) · `progress`(진행률) ·
+  `status`(종료) 세 종류 이벤트를 함께 구독해도 된다.
+- 원격 GPU 워커(#8①)는 워커가 로컬 진행률 파일을 공유 DB에 반영하므로 그대로 노출되고,
+  SSH 러너(#8②)는 원격 파일을 폴링할 수 없어 최종 리포트만 회수된다.
+
 ## 구조
 
 ```
@@ -132,7 +145,11 @@ api/
 ├── worker.py          # GPU/CPU 워커 스레드
 ├── schemas.py         # 요청/응답 모델
 ├── routers/           # projects · pipeline · jobs
-└── tests/test_e2e.py  # GPU 불필요 스모크 테스트
+└── tests/            # GPU 불필요 스모크/단위 테스트
+    ├── test_e2e.py       # 프로젝트→업로드→prepare(잡)→데이터셋 E2E
+    ├── test_remote.py    # 원격 SSH 러너(#8②) 분기
+    ├── test_worker.py    # 멀티프로세스 큐 + 역할 게이팅(#8①)
+    └── test_progress.py  # 실시간 진행률 + SSE progress 이벤트(#9)
 ```
 
 ## 테스트

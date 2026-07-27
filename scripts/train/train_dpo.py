@@ -20,6 +20,7 @@ import os
 from scripts.lib.pref_common import (load_config, load_model, load_pref_dataset,
                          save_adapter, trainer_kwargs, warn_if_too_small)
 from scripts.lib.common import add_report_arg, write_report
+from scripts.lib.report import make_progress_callback
 
 # 구버전 unsloth는 DPO 최적화를 위해 명시적 패치가 필요했음. 신버전은 불필요.
 try:
@@ -51,8 +52,10 @@ def main():
         label="DPO")
     warn_if_too_small(len(dataset), "DPO")
 
+    _cb = make_progress_callback(args.progress_json)
     trainer = DPOTrainer(
         model=model,
+        callbacks=[_cb] if _cb else None,
         # PEFT 모델이므로 ref_model=None이면 어댑터를 끈 상태가 reference가 된다.
         # init_from이 어댑터 단계면 reference = 베이스 모델,
         # 병합모델/base면 reference = 그 모델. (docs/preference_tuning.md 참고)

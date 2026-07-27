@@ -52,6 +52,7 @@ async def job_logs(jid: str, follow: bool = False):
 
     async def stream():
         pos = 0
+        last_progress = None
         while True:
             if log_path.exists():
                 with open(log_path, "r", encoding="utf-8") as fh:
@@ -60,6 +61,11 @@ async def job_logs(jid: str, follow: bool = False):
                         yield f"event: log\ndata: {json.dumps({'line': line.rstrip()})}\n\n"
                     pos = fh.tell()
             cur = store.get_job(jid)
+            # 진행률이 갱신되면 progress 이벤트로 흘려보낸다 (step/loss/pct 등).
+            prog = (cur or {}).get("progress")
+            if prog and prog != last_progress:
+                last_progress = prog
+                yield f"event: progress\ndata: {json.dumps(prog, ensure_ascii=False)}\n\n"
             if cur and cur["status"] in ("succeeded", "failed", "canceled"):
                 yield f"event: status\ndata: {json.dumps({'status': cur['status']})}\n\n"
                 return

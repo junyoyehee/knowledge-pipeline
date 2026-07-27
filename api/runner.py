@@ -93,7 +93,10 @@ def run_job(job: dict) -> None:
         module, *extra = _script_for(job)
         # 구조화 메트릭 리포트 경로 (stdout 파싱 대신 이 파일에서 결과 수집)
         report_path = jdir / "report.json"
-        extra = [*extra, "--report-json", str(report_path)]
+        # 실시간 진행률 파일 경로 (학습 스크립트의 TrainerCallback이 주기적으로 기록)
+        progress_path = jdir / "progress.json"
+        extra = [*extra, "--report-json", str(report_path),
+                 "--progress-json", str(progress_path)]
         remote_mode = remote.enabled_for(job["type"])
 
         # 3) 환경변수 (generate 잡은 LLM 시크릿 주입; 원격 GPU 잡은 불필요)
@@ -146,6 +149,12 @@ def run_job(job: dict) -> None:
                 if sm:
                     progress["step"] = int(sm.group(1))
                     progress["total"] = int(sm.group(2))
+                # 학습 콜백이 남긴 진행률 파일을 우선 반영 (step/loss/lr/epoch/pct).
+                # 원격 SSH 실행은 파일이 원격에 있어 폴링 불가(최종 리포트만 회수).
+                if not remote_mode:
+                    fp = _read_progress(progress_path)
+                    if fp:
+                        progress.update(fp)
                 if progress:
                     store.update_job(jid, progress=progress)
             rc = proc.wait()
@@ -183,6 +192,18 @@ def run_job(job: dict) -> None:
 
 def _read_report(path) -> dict | None:
     """스크립트가 남긴 구조화 리포트(JSON)를 읽는다. 없거나 손상 시 None."""
+    try:
+        import json
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _read_progress(path) -> dict | None:
+    """학습 콜백이 남긴 진행률 파일을 읽는다. 없거나 기록 중(손상)이면 None.
+
+    write_progress가 tmp→replace로 원자적으로 갈아끼우므로 부분 읽기는 없다.
+    """
     try:
         import json
         return json.loads(path.read_text(encoding="utf-8"))

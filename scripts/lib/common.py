@@ -73,9 +73,11 @@ def _abs(path: str) -> str:
 # ---------------------------------------------------------------
 
 def add_report_arg(parser) -> None:
-    """표준 --report-json 인자 추가."""
+    """표준 --report-json / --progress-json 인자 추가 (API 연동용)."""
     parser.add_argument("--report-json", default=None,
-                        help="완료 후 구조화 메트릭을 이 경로에 JSON으로 기록 (API 연동용)")
+                        help="완료 후 구조화 메트릭을 이 경로에 JSON으로 기록")
+    parser.add_argument("--progress-json", default=None,
+                        help="학습 중 실시간 진행률(step/loss)을 이 경로에 주기적으로 기록")
 
 
 def write_report(path: str, data: dict) -> None:

@@ -20,9 +20,13 @@
 | 추론형 | 데이터 생성 + 전용 학습 (react) | ✅ PR #3 |
 | 계획-실행 | 데이터 생성 + 전용 학습 (planact) | ✅ PR #4 |
 | API 설계 | docs/api_design.md | ✅ PR #5 |
-| **API Phase 1(MVP)** | FastAPI 비동기 Job 게이트웨이 | 🔄 PR #6 (열림) |
-| **scripts 패키지 재편** | 역할별 하위폴더 + 문서 | 🔄 PR #6 (열림) |
-| 원격 unsloth 설계 | docs/remote_unsloth.md | 🔄 PR #6 (열림) |
+| API Phase 1(MVP) | FastAPI 비동기 Job 게이트웨이 | ✅ PR #6 |
+| scripts 패키지 재편 | 역할별 하위폴더 + 문서 | ✅ PR #6 |
+| 원격 unsloth 설계 | docs/remote_unsloth.md | ✅ PR #6 |
+| 구조화 메트릭 (`--report-json`) | 전 스크립트 결과 JSON + 러너 수집 | ✅ #7 |
+| SSH 러너 (#8②) | rsync 푸시/풀 + ssh 원격 실행 | ✅ #8② |
+| 원격 GPU 워커 (#8①) | 공유 큐 + 역할 게이팅 워커 프로세스 | 🔄 PR #11 (열림) |
+| 실시간 진행률 (`--progress-json`) | 스텝 단위 진행률 + SSE progress | 🔄 #9 (본 작업) |
 
 > 학습 5단계(tool/plan/react/planact + 지식 CPT/SFT)와 그 데이터 생성기가 모두 갖춰졌고,
 > 이를 감싼 API MVP와 폴더 재편·설계 문서가 PR #6에 모여 있습니다.

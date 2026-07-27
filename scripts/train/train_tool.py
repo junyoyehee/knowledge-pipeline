@@ -32,6 +32,7 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 
 from scripts.lib.common import TEMPLATE_PARTS, add_report_arg, write_report
+from scripts.lib.report import make_progress_callback
 
 
 def _load_args(arguments):
@@ -70,7 +71,8 @@ def _rebuild_message(m: dict) -> dict:
 
 
 def train_tool_style(cfg: dict, stage_cfg: dict, dataset_path: str,
-                     stage_name: str, report_path: str = None):
+                     stage_name: str, report_path: str = None,
+                     progress_path: str = None):
     """{messages, tools} 형식 데이터셋을 학습하는 공용 로직.
 
     tool 단계와 planact(계획-실행) 단계가 완전히 같은 데이터 형식을 쓰므로
@@ -101,6 +103,7 @@ def train_tool_style(cfg: dict, stage_cfg: dict, dataset_path: str,
     print(f"[i] {stage_name.upper()} 학습 샘플 수: {len(dataset)}")
 
     # ---------- 학습 ----------
+    _cb = make_progress_callback(progress_path)
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -109,6 +112,7 @@ def train_tool_style(cfg: dict, stage_cfg: dict, dataset_path: str,
         max_seq_length=mcfg["max_seq_length"],
         dataset_num_proc=2,
         packing=False,
+        callbacks=[_cb] if _cb else None,
         args=TrainingArguments(
             output_dir=stage_cfg["output_dir"],
             num_train_epochs=tcfg["num_epochs"],
@@ -170,7 +174,8 @@ def main():
             "generate_tool_calls.py로 먼저 생성하세요.")
 
     train_tool_style(cfg, cfg["tool"], tool_path, "tool",
-                     report_path=args.report_json)
+                     report_path=args.report_json,
+                     progress_path=args.progress_json)
 
 
 if __name__ == "__main__":
